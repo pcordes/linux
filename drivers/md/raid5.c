@@ -3742,7 +3742,11 @@ static void handle_parity_checks5(struct r5conf *conf, struct stripe_head *sh,
 			set_bit(STRIPE_INSYNC, &sh->state);
 		else {
 			atomic64_add(STRIPE_SECTORS, &conf->mddev->resync_mismatches);
-			if (test_bit(MD_RECOVERY_CHECK, &conf->mddev->recovery))
+			int check_only = test_bit(MD_RECOVERY_CHECK, &conf->mddev->recovery);
+			printk(KERN_WARNING "md/raid:%s: %s found mismatch at sector %llu\n",
+			       mdname(conf->mddev), check_only ? "check" : "repair",
+			       (unsigned long long) sh->sector);
+			if (check_only)
 				/* don't try to repair!! */
 				set_bit(STRIPE_INSYNC, &sh->state);
 			else {
@@ -3894,7 +3898,11 @@ static void handle_parity_checks6(struct r5conf *conf, struct stripe_head *sh,
 			}
 		} else {
 			atomic64_add(STRIPE_SECTORS, &conf->mddev->resync_mismatches);
-			if (test_bit(MD_RECOVERY_CHECK, &conf->mddev->recovery))
+			int check_only = test_bit(MD_RECOVERY_CHECK, &conf->mddev->recovery);
+			printk(KERN_WARNING "md/raid:%s: %s found mismatch at sector %llu\n",
+			       mdname(conf->mddev), check_only ? "check" : "repair",
+			       (unsigned long long) sh->sector);
+			if (check_only)
 				/* don't try to repair!! */
 				set_bit(STRIPE_INSYNC, &sh->state);
 			else {
