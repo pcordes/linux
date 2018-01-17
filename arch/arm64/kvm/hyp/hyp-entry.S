@@ -19,7 +19,6 @@
 
 #include <asm/alternative.h>
 #include <asm/assembler.h>
-#include <asm/asm-offsets.h>
 #include <asm/cpufeature.h>
 #include <asm/kvm_arm.h>
 #include <asm/kvm_asm.h>
@@ -28,132 +27,132 @@
 	.text
 	.pushsection	.hyp.text, "ax"
 
-.macro	save_x0_to_x3
-	stp	x0, x1, [sp, #-16]!
-	stp	x2, x3, [sp, #-16]!
-.endm
-
-.macro	restore_x0_to_x3
-	ldp	x2, x3, [sp], #16
-	ldp	x0, x1, [sp], #16
-.endm
-
-el1_sync:				// Guest trapped into EL2
-	save_x0_to_x3
-
-	mrs	x1, esr_el2
-	lsr	x2, x1, #ESR_ELx_EC_SHIFT
-
-	cmp	x2, #ESR_ELx_EC_HVC64
-	b.ne	el1_trap
-
-	mrs	x3, vttbr_el2		// If vttbr is valid, the 64bit guest
-	cbnz	x3, el1_trap		// called HVC
-
-	/* Here, we're pretty sure the host called HVC. */
-	restore_x0_to_x3
-
-	/* Check for __hyp_get_vectors */
-	cbnz	x0, 1f
-	mrs	x0, vbar_el2
-	b	2f
-
-1:	stp	lr, xzr, [sp, #-16]!
-
+.macro do_el2_call
 	/*
-	 * Compute the function address in EL2, and shuffle the parameters.
+	 * Shuffle the parameters before calling the function
+	 * pointed to in x0. Assumes parameters in x[1,2,3].
 	 */
-	kern_hyp_va	x0
+	str	lr, [sp, #-16]!
 	mov	lr, x0
 	mov	x0, x1
 	mov	x1, x2
 	mov	x2, x3
 	blr	lr
+	ldr	lr, [sp], #16
+.endm
 
-	ldp	lr, xzr, [sp], #16
-2:	eret
-
-el1_trap:
+ENTRY(__vhe_hyp_call)
+	do_el2_call
 	/*
-	 * x1: ESR
-	 * x2: ESR_EC
+	 * We used to rely on having an exception return to get
+	 * an implicit isb. In the E2H case, we don't have it anymore.
+	 * rather than changing all the leaf functions, just do it here
+	 * before returning to the rest of the kernel.
 	 */
-
-	/* Guest accessed VFP/SIMD registers, save host, restore Guest */
-	cmp	x2, #ESR_ELx_EC_FP_ASIMD
-	b.eq	__fpsimd_guest_restore
-
-	cmp	x2, #ESR_ELx_EC_DABT_LOW
-	mov	x0, #ESR_ELx_EC_IABT_LOW
-	ccmp	x2, x0, #4, ne
-	b.ne	1f		// Not an abort we care about
-
-	/* This is an abort. Check for permission fault */
-alternative_if_not ARM64_WORKAROUND_834220
-	and	x2, x1, #ESR_ELx_FSC_TYPE
-	cmp	x2, #FSC_PERM
-	b.ne	1f		// Not a permission fault
-alternative_else
-	nop			// Use the permission fault path to
-	nop			// check for a valid S1 translation,
-	nop			// regardless of the ESR value.
-alternative_endif
-
-	/*
-	 * Check for Stage-1 page table walk, which is guaranteed
-	 * to give a valid HPFAR_EL2.
-	 */
-	tbnz	x1, #7, 1f	// S1PTW is set
-
-	/* Preserve PAR_EL1 */
-	mrs	x3, par_el1
-	stp	x3, xzr, [sp, #-16]!
-
-	/*
-	 * Permission fault, HPFAR_EL2 is invalid.
-	 * Resolve the IPA the hard way using the guest VA.
-	 * Stage-1 translation already validated the memory access rights.
-	 * As such, we can use the EL1 translation regime, and don't have
-	 * to distinguish between EL0 and EL1 access.
-	 */
-	mrs	x2, far_el2
-	at	s1e1r, x2
 	isb
+	ret
+ENDPROC(__vhe_hyp_call)
 
-	/* Read result */
-	mrs	x3, par_el1
-	ldp	x0, xzr, [sp], #16	// Restore PAR_EL1 from the stack
-	msr	par_el1, x0
-	tbnz	x3, #0, 3f		// Bail out if we failed the translation
-	ubfx	x3, x3, #12, #36	// Extract IPA
-	lsl	x3, x3, #4		// and present it like HPFAR
-	b	2f
+el1_sync:				// Guest trapped into EL2
+	stp	x0, x1, [sp, #-16]!
 
-1:	mrs	x3, hpfar_el2
-	mrs	x2, far_el2
+alternative_if_not ARM64_HAS_VIRT_HOST_EXTN
+	mrs	x1, esr_el2
+alternative_else
+	mrs	x1, esr_el1
+alternative_endif
+	lsr	x0, x1, #ESR_ELx_EC_SHIFT
 
-2:	mrs	x0, tpidr_el2
-	str	w1, [x0, #VCPU_ESR_EL2]
-	str	x2, [x0, #VCPU_FAR_EL2]
-	str	x3, [x0, #VCPU_HPFAR_EL2]
+	cmp	x0, #ESR_ELx_EC_HVC64
+	b.ne	el1_trap
 
-	mov	x1, #ARM_EXCEPTION_TRAP
-	b	__guest_exit
+	mrs	x1, vttbr_el2		// If vttbr is valid, the 64bit guest
+	cbnz	x1, el1_trap		// called HVC
+
+	/* Here, we're pretty sure the host called HVC. */
+	ldp	x0, x1, [sp], #16
+
+	/* Check for a stub HVC call */
+	cmp	x0, #HVC_STUB_HCALL_NR
+	b.hs	1f
 
 	/*
-	 * Translation failed. Just return to the guest and
-	 * let it fault again. Another CPU is probably playing
-	 * behind our back.
+	 * Compute the idmap address of __kvm_handle_stub_hvc and
+	 * jump there. Since we use kimage_voffset, do not use the
+	 * HYP VA for __kvm_handle_stub_hvc, but the kernel VA instead
+	 * (by loading it from the constant pool).
+	 *
+	 * Preserve x0-x4, which may contain stub parameters.
 	 */
-3:	restore_x0_to_x3
+	ldr	x5, =__kvm_handle_stub_hvc
+	ldr_l	x6, kimage_voffset
+
+	/* x5 = __pa(x5) */
+	sub	x5, x5, x6
+	br	x5
+
+1:
+	/*
+	 * Perform the EL2 call
+	 */
+	kern_hyp_va	x0
+	do_el2_call
 
 	eret
 
-el1_irq:
-	save_x0_to_x3
-	mrs	x0, tpidr_el2
-	mov	x1, #ARM_EXCEPTION_IRQ
+el1_trap:
+	/*
+	 * x0: ESR_EC
+	 */
+
+	/*
+	 * We trap the first access to the FP/SIMD to save the host context
+	 * and restore the guest context lazily.
+	 * If FP/SIMD is not implemented, handle the trap and inject an
+	 * undefined instruction exception to the guest.
+	 */
+alternative_if_not ARM64_HAS_NO_FPSIMD
+	cmp	x0, #ESR_ELx_EC_FP_ASIMD
+	b.eq	__fpsimd_guest_restore
+alternative_else_nop_endif
+
+	mrs	x1, tpidr_el2
+	mov	x0, #ARM_EXCEPTION_TRAP
 	b	__guest_exit
+
+el1_irq:
+	stp     x0, x1, [sp, #-16]!
+	mrs	x1, tpidr_el2
+	mov	x0, #ARM_EXCEPTION_IRQ
+	b	__guest_exit
+
+el1_error:
+	stp     x0, x1, [sp, #-16]!
+	mrs	x1, tpidr_el2
+	mov	x0, #ARM_EXCEPTION_EL1_SERROR
+	b	__guest_exit
+
+el2_error:
+	/*
+	 * Only two possibilities:
+	 * 1) Either we come from the exit path, having just unmasked
+	 *    PSTATE.A: change the return code to an EL2 fault, and
+	 *    carry on, as we're already in a sane state to handle it.
+	 * 2) Or we come from anywhere else, and that's a bug: we panic.
+	 *
+	 * For (1), x0 contains the original return code and x1 doesn't
+	 * contain anything meaningful at that stage. We can reuse them
+	 * as temp registers.
+	 * For (2), who cares?
+	 */
+	mrs	x0, elr_el2
+	adr	x1, abort_guest_exit_start
+	cmp	x0, x1
+	adr	x1, abort_guest_exit_end
+	ccmp	x0, x1, #4, ne
+	b.ne	__hyp_panic
+	mov	x0, #(1 << ARM_EXIT_WITH_SERROR_BIT)
+	eret
 
 ENTRY(__hyp_do_panic)
 	mov	lr, #(PSR_F_BIT | PSR_I_BIT | PSR_A_BIT | PSR_D_BIT |\
@@ -179,11 +178,9 @@ ENDPROC(\label)
 	invalid_vector	el2h_sync_invalid
 	invalid_vector	el2h_irq_invalid
 	invalid_vector	el2h_fiq_invalid
-	invalid_vector	el2h_error_invalid
 	invalid_vector	el1_sync_invalid
 	invalid_vector	el1_irq_invalid
 	invalid_vector	el1_fiq_invalid
-	invalid_vector	el1_error_invalid
 
 	.ltorg
 
@@ -198,15 +195,15 @@ ENTRY(__kvm_hyp_vector)
 	ventry	el2h_sync_invalid		// Synchronous EL2h
 	ventry	el2h_irq_invalid		// IRQ EL2h
 	ventry	el2h_fiq_invalid		// FIQ EL2h
-	ventry	el2h_error_invalid		// Error EL2h
+	ventry	el2_error			// Error EL2h
 
 	ventry	el1_sync			// Synchronous 64-bit EL1
 	ventry	el1_irq				// IRQ 64-bit EL1
 	ventry	el1_fiq_invalid			// FIQ 64-bit EL1
-	ventry	el1_error_invalid		// Error 64-bit EL1
+	ventry	el1_error			// Error 64-bit EL1
 
 	ventry	el1_sync			// Synchronous 32-bit EL1
 	ventry	el1_irq				// IRQ 32-bit EL1
 	ventry	el1_fiq_invalid			// FIQ 32-bit EL1
-	ventry	el1_error_invalid		// Error 32-bit EL1
+	ventry	el1_error			// Error 32-bit EL1
 ENDPROC(__kvm_hyp_vector)

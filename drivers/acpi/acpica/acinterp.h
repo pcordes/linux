@@ -5,7 +5,7 @@
  *****************************************************************************/
 
 /*
- * Copyright (C) 2000 - 2016, Intel Corp.
+ * Copyright (C) 2000 - 2017, Intel Corp.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -67,7 +67,7 @@
 typedef const struct acpi_exdump_info {
 	u8 opcode;
 	u8 offset;
-	char *name;
+	const char *name;
 
 } acpi_exdump_info;
 
@@ -101,7 +101,8 @@ typedef const struct acpi_exdump_info {
  */
 acpi_status
 acpi_ex_convert_to_integer(union acpi_operand_object *obj_desc,
-			   union acpi_operand_object **result_desc, u32 flags);
+			   union acpi_operand_object **result_desc,
+			   u32 implicit_conversion);
 
 acpi_status
 acpi_ex_convert_to_buffer(union acpi_operand_object *obj_desc,
@@ -370,7 +371,7 @@ acpi_ex_resolve_to_value(union acpi_operand_object **stack_ptr,
 acpi_status
 acpi_ex_resolve_multiple(struct acpi_walk_state *walk_state,
 			 union acpi_operand_object *operand,
-			 acpi_object_type * return_type,
+			 acpi_object_type *return_type,
 			 union acpi_operand_object **return_desc);
 
 /*
@@ -423,9 +424,6 @@ acpi_ex_store_object_to_node(union acpi_operand_object *source_desc,
 			     struct acpi_namespace_node *node,
 			     struct acpi_walk_state *walk_state,
 			     u8 implicit_conversion);
-
-#define ACPI_IMPLICIT_CONVERSION        TRUE
-#define ACPI_NO_IMPLICIT_CONVERSION     FALSE
 
 /*
  * exstoren - resolve/store object

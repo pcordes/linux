@@ -2115,7 +2115,7 @@ static void max98090_pll_work(struct work_struct *work)
 	if (!snd_soc_codec_is_active(codec))
 		return;
 
-	dev_info(codec->dev, "PLL unlocked\n");
+	dev_info_ratelimited(codec->dev, "PLL unlocked\n");
 
 	/* Toggle shutdown OFF then ON */
 	snd_soc_update_bits(codec, M98090_REG_DEVICE_SHUTDOWN,
@@ -2456,7 +2456,7 @@ static int max98090_probe(struct snd_soc_codec *codec)
 	if (err) {
 		micbias = M98090_MBVSEL_2V8;
 		dev_info(codec->dev, "use default 2.8v micbias\n");
-	} else if (micbias < M98090_MBVSEL_2V2 || micbias > M98090_MBVSEL_2V8) {
+	} else if (micbias > M98090_MBVSEL_2V8) {
 		dev_err(codec->dev, "micbias out of range 0x%x\n", micbias);
 		micbias = M98090_MBVSEL_2V8;
 	}
@@ -2499,7 +2499,7 @@ static void max98090_seq_notifier(struct snd_soc_dapm_context *dapm,
 	}
 }
 
-static struct snd_soc_codec_driver soc_codec_dev_max98090 = {
+static const struct snd_soc_codec_driver soc_codec_dev_max98090 = {
 	.probe   = max98090_probe,
 	.remove  = max98090_remove,
 	.seq_notifier = max98090_seq_notifier,

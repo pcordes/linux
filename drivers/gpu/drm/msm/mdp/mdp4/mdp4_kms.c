@@ -17,6 +17,7 @@
 
 
 #include "msm_drv.h"
+#include "msm_gem.h"
 #include "msm_mmu.h"
 #include "mdp4_kms.h"
 
@@ -49,30 +50,6 @@ static int mdp4_hw_init(struct msm_kms *kms)
 	}
 
 	mdp4_kms->rev = minor;
-
-	if (mdp4_kms->dsi_pll_vdda) {
-		if ((mdp4_kms->rev == 2) || (mdp4_kms->rev == 4)) {
-			ret = regulator_set_voltage(mdp4_kms->dsi_pll_vdda,
-					1200000, 1200000);
-			if (ret) {
-				dev_err(dev->dev,
-					"failed to set dsi_pll_vdda voltage: %d\n", ret);
-				goto out;
-			}
-		}
-	}
-
-	if (mdp4_kms->dsi_pll_vddio) {
-		if (mdp4_kms->rev == 2) {
-			ret = regulator_set_voltage(mdp4_kms->dsi_pll_vddio,
-					1800000, 1800000);
-			if (ret) {
-				dev_err(dev->dev,
-					"failed to set dsi_pll_vddio voltage: %d\n", ret);
-				goto out;
-			}
-		}
-	}
 
 	if (mdp4_kms->rev > 1) {
 		mdp4_write(mdp4_kms, REG_MDP4_CS_CONTROLLER0, 0x0707ffff);
@@ -130,31 +107,27 @@ out:
 static void mdp4_prepare_commit(struct msm_kms *kms, struct drm_atomic_state *state)
 {
 	struct mdp4_kms *mdp4_kms = to_mdp4_kms(to_mdp_kms(kms));
-	int i, ncrtcs = state->dev->mode_config.num_crtc;
+	int i;
+	struct drm_crtc *crtc;
+	struct drm_crtc_state *crtc_state;
 
 	mdp4_enable(mdp4_kms);
 
 	/* see 119ecb7fd */
-	for (i = 0; i < ncrtcs; i++) {
-		struct drm_crtc *crtc = state->crtcs[i];
-		if (!crtc)
-			continue;
+	for_each_new_crtc_in_state(state, crtc, crtc_state, i)
 		drm_crtc_vblank_get(crtc);
-	}
 }
 
 static void mdp4_complete_commit(struct msm_kms *kms, struct drm_atomic_state *state)
 {
 	struct mdp4_kms *mdp4_kms = to_mdp4_kms(to_mdp_kms(kms));
-	int i, ncrtcs = state->dev->mode_config.num_crtc;
+	int i;
+	struct drm_crtc *crtc;
+	struct drm_crtc_state *crtc_state;
 
 	/* see 119ecb7fd */
-	for (i = 0; i < ncrtcs; i++) {
-		struct drm_crtc *crtc = state->crtcs[i];
-		if (!crtc)
-			continue;
+	for_each_new_crtc_in_state(state, crtc, crtc_state, i)
 		drm_crtc_vblank_put(crtc);
-	}
 
 	mdp4_disable(mdp4_kms);
 }
@@ -179,23 +152,29 @@ static long mdp4_round_pixclk(struct msm_kms *kms, unsigned long rate,
 	}
 }
 
-static void mdp4_preclose(struct msm_kms *kms, struct drm_file *file)
-{
-	struct mdp4_kms *mdp4_kms = to_mdp4_kms(to_mdp_kms(kms));
-	struct msm_drm_private *priv = mdp4_kms->dev->dev_private;
-	unsigned i;
-
-	for (i = 0; i < priv->num_crtcs; i++)
-		mdp4_crtc_cancel_pending_flip(priv->crtcs[i], file);
-}
+static const char * const iommu_ports[] = {
+	"mdp_port0_cb0", "mdp_port1_cb0",
+};
 
 static void mdp4_destroy(struct msm_kms *kms)
 {
 	struct mdp4_kms *mdp4_kms = to_mdp4_kms(to_mdp_kms(kms));
+	struct device *dev = mdp4_kms->dev->dev;
+	struct msm_gem_address_space *aspace = kms->aspace;
+
 	if (mdp4_kms->blank_cursor_iova)
-		msm_gem_put_iova(mdp4_kms->blank_cursor_bo, mdp4_kms->id);
-	if (mdp4_kms->blank_cursor_bo)
-		drm_gem_object_unreference_unlocked(mdp4_kms->blank_cursor_bo);
+		msm_gem_put_iova(mdp4_kms->blank_cursor_bo, kms->aspace);
+	drm_gem_object_unreference_unlocked(mdp4_kms->blank_cursor_bo);
+
+	if (aspace) {
+		aspace->mmu->funcs->detach(aspace->mmu,
+				iommu_ports, ARRAY_SIZE(iommu_ports));
+		msm_gem_address_space_put(aspace);
+	}
+
+	if (mdp4_kms->rpm_enabled)
+		pm_runtime_disable(dev);
+
 	kfree(mdp4_kms);
 }
 
@@ -213,7 +192,6 @@ static const struct mdp_kms_funcs kms_funcs = {
 		.wait_for_crtc_commit_done = mdp4_wait_for_crtc_commit_done,
 		.get_format      = mdp_get_format,
 		.round_pixclk    = mdp4_round_pixclk,
-		.preclose        = mdp4_preclose,
 		.destroy         = mdp4_destroy,
 	},
 	.set_irqmask         = mdp4_set_irqmask,
@@ -247,29 +225,6 @@ int mdp4_enable(struct mdp4_kms *mdp4_kms)
 	return 0;
 }
 
-static struct device_node *mdp4_detect_lcdc_panel(struct drm_device *dev)
-{
-	struct device_node *endpoint, *panel_node;
-	struct device_node *np = dev->dev->of_node;
-
-	endpoint = of_graph_get_next_endpoint(np, NULL);
-	if (!endpoint) {
-		DBG("no endpoint in MDP4 to fetch LVDS panel\n");
-		return NULL;
-	}
-
-	/* don't proceed if we have an endpoint but no panel_node tied to it */
-	panel_node = of_graph_get_remote_port_parent(endpoint);
-	if (!panel_node) {
-		dev_err(dev->dev, "no valid panel node\n");
-		of_node_put(endpoint);
-		return ERR_PTR(-ENODEV);
-	}
-
-	of_node_put(endpoint);
-
-	return panel_node;
-}
 
 static int mdp4_modeset_init_intf(struct mdp4_kms *mdp4_kms,
 				  int intf_type)
@@ -279,21 +234,18 @@ static int mdp4_modeset_init_intf(struct mdp4_kms *mdp4_kms,
 	struct drm_encoder *encoder;
 	struct drm_connector *connector;
 	struct device_node *panel_node;
-	struct drm_encoder *dsi_encs[MSM_DSI_ENCODER_NUM];
-	int i, dsi_id;
+	int dsi_id;
 	int ret;
 
 	switch (intf_type) {
 	case DRM_MODE_ENCODER_LVDS:
 		/*
-		 * bail out early if:
-		 * - there is no panel node (no need to initialize lcdc
-		 *   encoder and lvds connector), or
-		 * - panel node is a bad pointer
+		 * bail out early if there is no panel node (no need to
+		 * initialize LCDC encoder and LVDS connector)
 		 */
-		panel_node = mdp4_detect_lcdc_panel(dev);
-		if (IS_ERR_OR_NULL(panel_node))
-			return PTR_ERR(panel_node);
+		panel_node = of_graph_get_remote_node(dev->dev->of_node, 0, 0);
+		if (!panel_node)
+			return 0;
 
 		encoder = mdp4_lcdc_encoder_init(dev, panel_node);
 		if (IS_ERR(encoder)) {
@@ -326,7 +278,7 @@ static int mdp4_modeset_init_intf(struct mdp4_kms *mdp4_kms,
 
 		if (priv->hdmi) {
 			/* Construct bridge/connector for HDMI: */
-			ret = hdmi_modeset_init(priv->hdmi, dev, encoder);
+			ret = msm_hdmi_modeset_init(priv->hdmi, dev, encoder);
 			if (ret) {
 				dev_err(dev->dev, "failed to initialize HDMI: %d\n", ret);
 				return ret;
@@ -343,22 +295,19 @@ static int mdp4_modeset_init_intf(struct mdp4_kms *mdp4_kms,
 		if (!priv->dsi[dsi_id])
 			break;
 
-		for (i = 0; i < MSM_DSI_ENCODER_NUM; i++) {
-			dsi_encs[i] = mdp4_dsi_encoder_init(dev);
-			if (IS_ERR(dsi_encs[i])) {
-				ret = PTR_ERR(dsi_encs[i]);
-				dev_err(dev->dev,
-					"failed to construct DSI encoder: %d\n",
-					ret);
-				return ret;
-			}
-
-			/* TODO: Add DMA_S later? */
-			dsi_encs[i]->possible_crtcs = 1 << DMA_P;
-			priv->encoders[priv->num_encoders++] = dsi_encs[i];
+		encoder = mdp4_dsi_encoder_init(dev);
+		if (IS_ERR(encoder)) {
+			ret = PTR_ERR(encoder);
+			dev_err(dev->dev,
+				"failed to construct DSI encoder: %d\n", ret);
+			return ret;
 		}
 
-		ret = msm_dsi_modeset_init(priv->dsi[dsi_id], dev, dsi_encs);
+		/* TODO: Add DMA_S later? */
+		encoder->possible_crtcs = 1 << DMA_P;
+		priv->encoders[priv->num_encoders++] = encoder;
+
+		ret = msm_dsi_modeset_init(priv->dsi[dsi_id], dev, encoder);
 		if (ret) {
 			dev_err(dev->dev, "failed to initialize DSI: %d\n",
 				ret);
@@ -457,18 +406,14 @@ fail:
 	return ret;
 }
 
-static const char *iommu_ports[] = {
-		"mdp_port0_cb0", "mdp_port1_cb0",
-};
-
 struct msm_kms *mdp4_kms_init(struct drm_device *dev)
 {
-	struct platform_device *pdev = dev->platformdev;
+	struct platform_device *pdev = to_platform_device(dev->dev);
 	struct mdp4_platform_config *config = mdp4_get_config(pdev);
 	struct mdp4_kms *mdp4_kms;
 	struct msm_kms *kms = NULL;
-	struct msm_mmu *mmu;
-	int ret;
+	struct msm_gem_address_space *aspace;
+	int irq, ret;
 
 	mdp4_kms = kzalloc(sizeof(*mdp4_kms), GFP_KERNEL);
 	if (!mdp4_kms) {
@@ -489,15 +434,14 @@ struct msm_kms *mdp4_kms_init(struct drm_device *dev)
 		goto fail;
 	}
 
-	mdp4_kms->dsi_pll_vdda =
-			devm_regulator_get_optional(&pdev->dev, "dsi_pll_vdda");
-	if (IS_ERR(mdp4_kms->dsi_pll_vdda))
-		mdp4_kms->dsi_pll_vdda = NULL;
+	irq = platform_get_irq(pdev, 0);
+	if (irq < 0) {
+		ret = irq;
+		dev_err(dev->dev, "failed to get irq: %d\n", ret);
+		goto fail;
+	}
 
-	mdp4_kms->dsi_pll_vddio =
-			devm_regulator_get_optional(&pdev->dev, "dsi_pll_vddio");
-	if (IS_ERR(mdp4_kms->dsi_pll_vddio))
-		mdp4_kms->dsi_pll_vddio = NULL;
+	kms->irq = irq;
 
 	/* NOTE: driver for this regulator still missing upstream.. use
 	 * _get_exclusive() and ignore the error if it does not exist
@@ -534,7 +478,7 @@ struct msm_kms *mdp4_kms_init(struct drm_device *dev)
 		goto fail;
 	}
 
-	mdp4_kms->axi_clk = devm_clk_get(&pdev->dev, "mdp_axi_clk");
+	mdp4_kms->axi_clk = devm_clk_get(&pdev->dev, "bus_clk");
 	if (IS_ERR(mdp4_kms->axi_clk)) {
 		dev_err(dev->dev, "failed to get axi_clk\n");
 		ret = PTR_ERR(mdp4_kms->axi_clk);
@@ -543,6 +487,9 @@ struct msm_kms *mdp4_kms_init(struct drm_device *dev)
 
 	clk_set_rate(mdp4_kms->clk, config->max_clk);
 	clk_set_rate(mdp4_kms->lut_clk, config->max_clk);
+
+	pm_runtime_enable(dev->dev);
+	mdp4_kms->rpm_enabled = true;
 
 	/* make sure things are off before attaching iommu (bootloader could
 	 * have left things on, in which case we'll start getting faults if
@@ -556,26 +503,23 @@ struct msm_kms *mdp4_kms_init(struct drm_device *dev)
 	mdelay(16);
 
 	if (config->iommu) {
-		mmu = msm_iommu_new(&pdev->dev, config->iommu);
-		if (IS_ERR(mmu)) {
-			ret = PTR_ERR(mmu);
+		aspace = msm_gem_address_space_create(&pdev->dev,
+				config->iommu, "mdp4");
+		if (IS_ERR(aspace)) {
+			ret = PTR_ERR(aspace);
 			goto fail;
 		}
-		ret = mmu->funcs->attach(mmu, iommu_ports,
+
+		kms->aspace = aspace;
+
+		ret = aspace->mmu->funcs->attach(aspace->mmu, iommu_ports,
 				ARRAY_SIZE(iommu_ports));
 		if (ret)
 			goto fail;
 	} else {
 		dev_info(dev->dev, "no iommu, fallback to phys "
 				"contig buffers for scanout\n");
-		mmu = NULL;
-	}
-
-	mdp4_kms->id = msm_register_mmu(dev, mmu);
-	if (mdp4_kms->id < 0) {
-		ret = mdp4_kms->id;
-		dev_err(dev->dev, "failed to register mdp4 iommu: %d\n", ret);
-		goto fail;
+		aspace = NULL;
 	}
 
 	ret = modeset_init(mdp4_kms);
@@ -584,9 +528,7 @@ struct msm_kms *mdp4_kms_init(struct drm_device *dev)
 		goto fail;
 	}
 
-	mutex_lock(&dev->struct_mutex);
 	mdp4_kms->blank_cursor_bo = msm_gem_new(dev, SZ_16K, MSM_BO_WC);
-	mutex_unlock(&dev->struct_mutex);
 	if (IS_ERR(mdp4_kms->blank_cursor_bo)) {
 		ret = PTR_ERR(mdp4_kms->blank_cursor_bo);
 		dev_err(dev->dev, "could not allocate blank-cursor bo: %d\n", ret);
@@ -594,7 +536,7 @@ struct msm_kms *mdp4_kms_init(struct drm_device *dev)
 		goto fail;
 	}
 
-	ret = msm_gem_get_iova(mdp4_kms->blank_cursor_bo, mdp4_kms->id,
+	ret = msm_gem_get_iova(mdp4_kms->blank_cursor_bo, kms->aspace,
 			&mdp4_kms->blank_cursor_iova);
 	if (ret) {
 		dev_err(dev->dev, "could not pin blank-cursor bo: %d\n", ret);
@@ -621,6 +563,10 @@ static struct mdp4_platform_config *mdp4_get_config(struct platform_device *dev)
 	/* TODO: Chips that aren't apq8064 have a 200 Mhz max_clk */
 	config.max_clk = 266667000;
 	config.iommu = iommu_domain_alloc(&platform_bus_type);
+	if (config.iommu) {
+		config.iommu->geometry.aperture_start = 0x1000;
+		config.iommu->geometry.aperture_end = 0xffffffff;
+	}
 
 	return &config;
 }

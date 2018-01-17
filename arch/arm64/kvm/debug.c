@@ -95,6 +95,7 @@ void kvm_arm_reset_debug_ptr(struct kvm_vcpu *vcpu)
  *  - Performance monitors (MDCR_EL2_TPM/MDCR_EL2_TPMCR)
  *  - Debug ROM Address (MDCR_EL2_TDRA)
  *  - OS related registers (MDCR_EL2_TDOSA)
+ *  - Statistical profiler (MDCR_EL2_TPMS/MDCR_EL2_E2PB)
  *
  * Additionally, KVM only traps guest accesses to the debug registers if
  * the guest is not actively using them (see the KVM_ARM64_DEBUG_DIRTY
@@ -110,8 +111,13 @@ void kvm_arm_setup_debug(struct kvm_vcpu *vcpu)
 
 	trace_kvm_arm_setup_debug(vcpu, vcpu->guest_debug);
 
+	/*
+	 * This also clears MDCR_EL2_E2PB_MASK to disable guest access
+	 * to the profiling buffer.
+	 */
 	vcpu->arch.mdcr_el2 = __this_cpu_read(mdcr_el2) & MDCR_EL2_HPMN_MASK;
 	vcpu->arch.mdcr_el2 |= (MDCR_EL2_TPM |
+				MDCR_EL2_TPMS |
 				MDCR_EL2_TPMCR |
 				MDCR_EL2_TDRA |
 				MDCR_EL2_TDOSA);
@@ -214,4 +220,25 @@ void kvm_arm_clear_debug(struct kvm_vcpu *vcpu)
 						&vcpu->arch.debug_ptr->dbg_wvr[0]);
 		}
 	}
+}
+
+
+/*
+ * After successfully emulating an instruction, we might want to
+ * return to user space with a KVM_EXIT_DEBUG. We can only do this
+ * once the emulation is complete, though, so for userspace emulations
+ * we have to wait until we have re-entered KVM before calling this
+ * helper.
+ *
+ * Return true (and set exit_reason) to return to userspace or false
+ * if no further action is required.
+ */
+bool kvm_arm_handle_step_debug(struct kvm_vcpu *vcpu, struct kvm_run *run)
+{
+	if (vcpu->guest_debug & KVM_GUESTDBG_SINGLESTEP) {
+		run->exit_reason = KVM_EXIT_DEBUG;
+		run->debug.arch.hsr = ESR_ELx_EC_SOFTSTP_LOW << ESR_ELx_EC_SHIFT;
+		return true;
+	}
+	return false;
 }

@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0 */
 #undef TRACE_SYSTEM
 #define TRACE_SYSTEM asoc
 
@@ -231,13 +232,13 @@ TRACE_EVENT(snd_soc_jack_report,
 	TP_ARGS(jack, mask, val),
 
 	TP_STRUCT__entry(
-		__string(	name,		jack->jack->name	)
+		__string(	name,		jack->jack->id		)
 		__field(	int,		mask			)
 		__field(	int,		val			)
 	),
 
 	TP_fast_assign(
-		__assign_str(name, jack->jack->name);
+		__assign_str(name, jack->jack->id);
 		__entry->mask = mask;
 		__entry->val = val;
 	),
@@ -253,12 +254,12 @@ TRACE_EVENT(snd_soc_jack_notify,
 	TP_ARGS(jack, val),
 
 	TP_STRUCT__entry(
-		__string(	name,		jack->jack->name	)
+		__string(	name,		jack->jack->id		)
 		__field(	int,		val			)
 	),
 
 	TP_fast_assign(
-		__assign_str(name, jack->jack->name);
+		__assign_str(name, jack->jack->id);
 		__entry->val = val;
 	),
 

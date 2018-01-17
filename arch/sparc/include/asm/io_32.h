@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0 */
 #ifndef __SPARC_IO_H
 #define __SPARC_IO_H
 
@@ -139,16 +140,6 @@ void ioport_unmap(void __iomem *);
 /* Create a virtual mapping cookie for a PCI BAR (memory or IO) */
 struct pci_dev;
 void pci_iounmap(struct pci_dev *dev, void __iomem *);
-
-
-
-/*
- * At the moment, we do not use CMOS_READ anywhere outside of rtc.c,
- * so rtc_port is static in it. This should not change unless a new
- * hardware pops up.
- */
-#define RTC_PORT(x)   (rtc_port + (x))
-#define RTC_ALWAYS_BCD  0
 
 static inline int sbus_can_dma_64bit(void)
 {

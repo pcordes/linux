@@ -29,24 +29,26 @@ static int rsnd_cmd_init(struct rsnd_mod *mod,
 {
 	struct rsnd_mod *dvc = rsnd_io_to_mod_dvc(io);
 	struct rsnd_mod *mix = rsnd_io_to_mod_mix(io);
-	struct rsnd_mod *src = rsnd_io_to_mod_src(io);
 	struct device *dev = rsnd_priv_to_dev(priv);
 	u32 data;
+	static const u32 path[] = {
+		[1] = 1 << 0,
+		[5] = 1 << 8,
+		[6] = 1 << 12,
+		[9] = 1 << 15,
+	};
 
 	if (!mix && !dvc)
 		return 0;
 
+	if (ARRAY_SIZE(path) < rsnd_mod_id(mod) + 1)
+		return -ENXIO;
+
 	if (mix) {
 		struct rsnd_dai *rdai;
+		struct rsnd_mod *src;
+		struct rsnd_dai_stream *tio;
 		int i;
-		u32 path[] = {
-			[0] = 0,
-			[1] = 1 << 0,
-			[2] = 0,
-			[3] = 0,
-			[4] = 0,
-			[5] = 1 << 8
-		};
 
 		/*
 		 * it is assuming that integrater is well understanding about
@@ -55,31 +57,42 @@ static int rsnd_cmd_init(struct rsnd_mod *mod,
 		 */
 		data = 0;
 		for_each_rsnd_dai(rdai, priv, i) {
-			io = &rdai->playback;
-			if (mix == rsnd_io_to_mod_mix(io))
+			tio = &rdai->playback;
+			src = rsnd_io_to_mod_src(tio);
+			if (mix == rsnd_io_to_mod_mix(tio))
 				data |= path[rsnd_mod_id(src)];
 
-			io = &rdai->capture;
-			if (mix == rsnd_io_to_mod_mix(io))
+			tio = &rdai->capture;
+			src = rsnd_io_to_mod_src(tio);
+			if (mix == rsnd_io_to_mod_mix(tio))
 				data |= path[rsnd_mod_id(src)];
 		}
 
 	} else {
-		u32 path[] = {
-			[0] = 0x30000,
-			[1] = 0x30001,
-			[2] = 0x40000,
-			[3] = 0x10000,
-			[4] = 0x20000,
-			[5] = 0x40100
+		struct rsnd_mod *src = rsnd_io_to_mod_src(io);
+
+		static const u8 cmd_case[] = {
+			[0] = 0x3,
+			[1] = 0x3,
+			[2] = 0x4,
+			[3] = 0x1,
+			[4] = 0x2,
+			[5] = 0x4,
+			[6] = 0x1,
+			[9] = 0x2,
 		};
 
-		data = path[rsnd_mod_id(src)];
+		if (unlikely(!src))
+			return -EIO;
+
+		data = path[rsnd_mod_id(src)] |
+			cmd_case[rsnd_mod_id(src)] << 16;
 	}
 
 	dev_dbg(dev, "ctu/mix path = 0x%08x", data);
 
 	rsnd_mod_write(mod, CMD_ROUTE_SLCT, data);
+	rsnd_mod_write(mod, CMD_BUSIF_MODE, rsnd_get_busif_shift(io, mod) | 1);
 	rsnd_mod_write(mod, CMD_BUSIF_DALIGN, rsnd_get_dalign(mod, io));
 
 	rsnd_adg_set_cmd_timsel_gen2(mod, io);
@@ -152,7 +165,8 @@ int rsnd_cmd_probe(struct rsnd_priv *priv)
 
 	for_each_rsnd_cmd(cmd, priv, i) {
 		ret = rsnd_mod_init(priv, rsnd_mod_get(cmd),
-				    &rsnd_cmd_ops, NULL, RSND_MOD_CMD, i);
+				    &rsnd_cmd_ops, NULL,
+				    rsnd_mod_get_status, RSND_MOD_CMD, i);
 		if (ret)
 			return ret;
 	}

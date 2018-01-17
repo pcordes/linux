@@ -16,10 +16,10 @@
  * this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
-#include "mdp4_kms.h"
+#include <drm/drm_crtc.h>
+#include <drm/drm_crtc_helper.h>
 
-#include "drm_crtc.h"
-#include "drm_crtc_helper.h"
+#include "mdp4_kms.h"
 
 struct mdp4_lcdc_encoder {
 	struct drm_encoder base;
@@ -93,7 +93,7 @@ static const struct drm_encoder_funcs mdp4_lcdc_encoder_funcs = {
 };
 
 /* this should probably be a helper: */
-struct drm_connector *get_connector(struct drm_encoder *encoder)
+static struct drm_connector *get_connector(struct drm_encoder *encoder)
 {
 	struct drm_device *dev = encoder->dev;
 	struct drm_connector *connector;
@@ -260,13 +260,6 @@ static void setup_phy(struct drm_encoder *encoder)
 	mdp4_write(mdp4_kms, REG_MDP4_LVDS_PHY_CFG0, lvds_phy_cfg0);
 }
 
-static bool mdp4_lcdc_encoder_mode_fixup(struct drm_encoder *encoder,
-		const struct drm_display_mode *mode,
-		struct drm_display_mode *adjusted_mode)
-{
-	return true;
-}
-
 static void mdp4_lcdc_encoder_mode_set(struct drm_encoder *encoder,
 		struct drm_display_mode *mode,
 		struct drm_display_mode *adjusted_mode)
@@ -430,7 +423,6 @@ static void mdp4_lcdc_encoder_enable(struct drm_encoder *encoder)
 }
 
 static const struct drm_encoder_helper_funcs mdp4_lcdc_encoder_helper_funcs = {
-	.mode_fixup = mdp4_lcdc_encoder_mode_fixup,
 	.mode_set = mdp4_lcdc_encoder_mode_set,
 	.disable = mdp4_lcdc_encoder_disable,
 	.enable = mdp4_lcdc_encoder_enable,

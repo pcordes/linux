@@ -38,7 +38,7 @@ struct clk_busy_divider {
 
 static inline struct clk_busy_divider *to_clk_busy_divider(struct clk_hw *hw)
 {
-	struct clk_divider *div = container_of(hw, struct clk_divider, hw);
+	struct clk_divider *div = to_clk_divider(hw);
 
 	return container_of(div, struct clk_busy_divider, div);
 }
@@ -72,7 +72,7 @@ static int clk_busy_divider_set_rate(struct clk_hw *hw, unsigned long rate,
 	return ret;
 }
 
-static struct clk_ops clk_busy_divider_ops = {
+static const struct clk_ops clk_busy_divider_ops = {
 	.recalc_rate = clk_busy_divider_recalc_rate,
 	.round_rate = clk_busy_divider_round_rate,
 	.set_rate = clk_busy_divider_set_rate,
@@ -123,7 +123,7 @@ struct clk_busy_mux {
 
 static inline struct clk_busy_mux *to_clk_busy_mux(struct clk_hw *hw)
 {
-	struct clk_mux *mux = container_of(hw, struct clk_mux, hw);
+	struct clk_mux *mux = to_clk_mux(hw);
 
 	return container_of(mux, struct clk_busy_mux, mux);
 }
@@ -147,7 +147,7 @@ static int clk_busy_mux_set_parent(struct clk_hw *hw, u8 index)
 	return ret;
 }
 
-static struct clk_ops clk_busy_mux_ops = {
+static const struct clk_ops clk_busy_mux_ops = {
 	.get_parent = clk_busy_mux_get_parent,
 	.set_parent = clk_busy_mux_set_parent,
 };

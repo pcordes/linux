@@ -648,17 +648,15 @@ static void efx_ptp_send_times(struct efx_nic *efx,
 	struct pps_event_time now;
 	struct timespec64 limit;
 	struct efx_ptp_data *ptp = efx->ptp_data;
-	struct timespec64 start;
 	int *mc_running = ptp->start.addr;
 
 	pps_get_ts(&now);
-	start = now.ts_real;
 	limit = now.ts_real;
 	timespec64_add_ns(&limit, SYNCHRONISE_PERIOD_NS);
 
 	/* Write host time for specified period or until MC is done */
 	while ((timespec64_compare(&now.ts_real, &limit) < 0) &&
-	       ACCESS_ONCE(*mc_running)) {
+	       READ_ONCE(*mc_running)) {
 		struct timespec64 update_time;
 		unsigned int host_time;
 
@@ -668,7 +666,7 @@ static void efx_ptp_send_times(struct efx_nic *efx,
 		do {
 			pps_get_ts(&now);
 		} while ((timespec64_compare(&now.ts_real, &update_time) < 0) &&
-			 ACCESS_ONCE(*mc_running));
+			 READ_ONCE(*mc_running));
 
 		/* Synchronise NIC with single word of time only */
 		host_time = (now.ts_real.tv_sec << MC_NANOSECOND_BITS |
@@ -832,14 +830,14 @@ static int efx_ptp_synchronize(struct efx_nic *efx, unsigned int num_readings)
 		       ptp->start.dma_addr);
 
 	/* Clear flag that signals MC ready */
-	ACCESS_ONCE(*start) = 0;
+	WRITE_ONCE(*start, 0);
 	rc = efx_mcdi_rpc_start(efx, MC_CMD_PTP, synch_buf,
 				MC_CMD_PTP_IN_SYNCHRONIZE_LEN);
-	EFX_BUG_ON_PARANOID(rc);
+	EFX_WARN_ON_ONCE_PARANOID(rc);
 
 	/* Wait for start from MCDI (or timeout) */
 	timeout = jiffies + msecs_to_jiffies(MAX_SYNCHRONISE_WAIT_MS);
-	while (!ACCESS_ONCE(*start) && (time_before(jiffies, timeout))) {
+	while (!READ_ONCE(*start) && (time_before(jiffies, timeout))) {
 		udelay(20);	/* Usually start MCDI execution quickly */
 		loops++;
 	}
@@ -849,7 +847,7 @@ static int efx_ptp_synchronize(struct efx_nic *efx, unsigned int num_readings)
 	if (!time_before(jiffies, timeout))
 		++ptp->sync_timeouts;
 
-	if (ACCESS_ONCE(*start))
+	if (READ_ONCE(*start))
 		efx_ptp_send_times(efx, &last_time);
 
 	/* Collect results */
@@ -1269,13 +1267,13 @@ int efx_ptp_probe(struct efx_nic *efx, struct efx_channel *channel)
 		if (IS_ERR(ptp->phc_clock)) {
 			rc = PTR_ERR(ptp->phc_clock);
 			goto fail3;
-		}
-
-		INIT_WORK(&ptp->pps_work, efx_ptp_pps_worker);
-		ptp->pps_workwq = create_singlethread_workqueue("sfc_pps");
-		if (!ptp->pps_workwq) {
-			rc = -ENOMEM;
-			goto fail4;
+		} else if (ptp->phc_clock) {
+			INIT_WORK(&ptp->pps_work, efx_ptp_pps_worker);
+			ptp->pps_workwq = create_singlethread_workqueue("sfc_pps");
+			if (!ptp->pps_workwq) {
+				rc = -ENOMEM;
+				goto fail4;
+			}
 		}
 	}
 	ptp->nic_ts_enabled = false;
@@ -1306,7 +1304,7 @@ static int efx_ptp_probe_channel(struct efx_channel *channel)
 {
 	struct efx_nic *efx = channel->efx;
 
-	channel->irq_moderation = 0;
+	channel->irq_moderation_us = 0;
 	channel->rx_queue.core_index = 0;
 
 	return efx_ptp_probe(efx, channel);

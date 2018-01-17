@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0
 /*
  * Toshiba TC86C001 ("Goku-S") USB Device Controller driver
  *
@@ -5,10 +6,6 @@
  *      by Stuart Lynne, Tom Rushworth, and Bruce Balden
  * Copyright (C) 2002 Toshiba Corporation
  * Copyright (C) 2003 MontaVista Software (source@mvista.com)
- *
- * This file is licensed under the terms of the GNU General Public
- * License version 2.  This program is licensed "as is" without any
- * warranty of any kind, whether express or implied.
  */
 
 /*
@@ -127,11 +124,15 @@ goku_ep_enable(struct usb_ep *_ep, const struct usb_endpoint_descriptor *desc)
 	mode = 0;
 	max = get_unaligned_le16(&desc->wMaxPacketSize);
 	switch (max) {
-	case 64:	mode++;
-	case 32:	mode++;
-	case 16:	mode++;
-	case 8:		mode <<= 3;
-			break;
+	case 64:
+		mode++; /* fall through */
+	case 32:
+		mode++; /* fall through */
+	case 16:
+		mode++; /* fall through */
+	case 8:
+		mode <<= 3;
+		break;
 	default:
 		return -EINVAL;
 	}
@@ -968,7 +969,7 @@ static void goku_fifo_flush(struct usb_ep *_ep)
 		command(regs, COMMAND_FIFO_CLEAR, ep->num);
 }
 
-static struct usb_ep_ops goku_ep_ops = {
+static const struct usb_ep_ops goku_ep_ops = {
 	.enable		= goku_ep_enable,
 	.disable	= goku_ep_disable,
 
@@ -1767,8 +1768,7 @@ static int goku_probe(struct pci_dev *pdev, const struct pci_device_id *id)
 
 	/* alloc, and start init */
 	dev = kzalloc (sizeof *dev, GFP_KERNEL);
-	if (dev == NULL){
-		pr_debug("enomem %s\n", pci_name(pdev));
+	if (!dev) {
 		retval = -ENOMEM;
 		goto err;
 	}
@@ -1839,6 +1839,8 @@ static int goku_probe(struct pci_dev *pdev, const struct pci_device_id *id)
 err:
 	if (dev)
 		goku_remove (pdev);
+	/* gadget_release is not registered yet, kfree explicitly */
+	kfree(dev);
 	return retval;
 }
 
@@ -1846,7 +1848,7 @@ err:
 /*-------------------------------------------------------------------------*/
 
 static const struct pci_device_id pci_ids[] = { {
-	.class =	((PCI_CLASS_SERIAL_USB << 8) | 0xfe),
+	.class =	PCI_CLASS_SERIAL_USB_DEVICE,
 	.class_mask =	~0,
 	.vendor =	0x102f,		/* Toshiba */
 	.device =	0x0107,		/* this UDC */

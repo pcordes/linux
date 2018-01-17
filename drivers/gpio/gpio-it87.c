@@ -2,6 +2,7 @@
  *  GPIO interface for IT87xx Super I/O chips
  *
  *  Author: Diego Elio Pettenò <flameeyes@flameeyes.eu>
+ *  Copyright (c) 2017 Google, Inc.
  *
  *  Based on it87_wdt.c     by Oliver Schuster
  *           gpio-it8761e.c by Denis Turischev
@@ -34,9 +35,12 @@
 
 /* Chip Id numbers */
 #define NO_DEV_ID	0xffff
+#define IT8620_ID	0x8620
+#define IT8628_ID	0x8628
 #define IT8728_ID	0x8728
 #define IT8732_ID	0x8732
 #define IT8761_ID	0x8761
+#define IT8772_ID	0x8772
 
 /* IO Ports */
 #define REG		0x2e
@@ -271,7 +275,7 @@ exit:
 	return rc;
 }
 
-static struct gpio_chip it87_template_chip = {
+static const struct gpio_chip it87_template_chip = {
 	.label			= KBUILD_MODNAME,
 	.owner			= THIS_MODULE,
 	.request		= it87_gpio_request,
@@ -302,8 +306,17 @@ static int __init it87_gpio_init(void)
 	it87_gpio->chip = it87_template_chip;
 
 	switch (chip_type) {
+	case IT8620_ID:
+	case IT8628_ID:
+		gpio_ba_reg = 0x62;
+		it87_gpio->io_size = 11;
+		it87_gpio->output_base = 0xc8;
+		it87_gpio->simple_size = 0;
+		it87_gpio->chip.ngpio = 64;
+		break;
 	case IT8728_ID:
 	case IT8732_ID:
+	case IT8772_ID:
 		gpio_ba_reg = 0x62;
 		it87_gpio->io_size = 8;
 		it87_gpio->output_base = 0xc8;

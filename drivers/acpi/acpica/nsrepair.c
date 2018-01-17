@@ -5,7 +5,7 @@
  *****************************************************************************/
 
 /*
- * Copyright (C) 2000 - 2016, Intel Corp.
+ * Copyright (C) 2000 - 2017, Intel Corp.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -290,22 +290,12 @@ object_repaired:
 	/* Object was successfully repaired */
 
 	if (package_index != ACPI_NOT_PACKAGE_ELEMENT) {
-		/*
-		 * The original object is a package element. We need to
-		 * decrement the reference count of the original object,
-		 * for removing it from the package.
-		 *
-		 * However, if the original object was just wrapped with a
-		 * package object as part of the repair, we don't need to
-		 * change the reference count.
-		 */
+
+		/* Update reference count of new object */
+
 		if (!(info->return_flags & ACPI_OBJECT_WRAPPED)) {
 			new_object->common.reference_count =
 			    return_object->common.reference_count;
-
-			if (return_object->common.reference_count > 1) {
-				return_object->common.reference_count--;
-			}
 		}
 
 		ACPI_DEBUG_PRINT((ACPI_DB_REPAIR,
@@ -399,7 +389,7 @@ static const struct acpi_simple_repair_info *acpi_ns_match_simple_repair(struct
  ******************************************************************************/
 
 acpi_status
-acpi_ns_repair_null_element(struct acpi_evaluate_info * info,
+acpi_ns_repair_null_element(struct acpi_evaluate_info *info,
 			    u32 expected_btypes,
 			    u32 package_index,
 			    union acpi_operand_object **return_object_ptr)

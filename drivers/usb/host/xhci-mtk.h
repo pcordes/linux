@@ -1,18 +1,9 @@
+// SPDX-License-Identifier: GPL-2.0
 /*
  * Copyright (c) 2015 MediaTek Inc.
  * Author:
  *  Zhigang.Wei <zhigang.wei@mediatek.com>
  *  Chunfeng.Yun <chunfeng.yun@mediatek.com>
- *
- * This software is licensed under the terms of the GNU General Public
- * License version 2, as published by the Free Software Foundation, and
- * may be copied, distributed, and modified under those terms.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
  */
 
 #ifndef _XHCI_MTK_H_
@@ -118,13 +109,16 @@ struct xhci_hcd_mtk {
 	struct usb_hcd *hcd;
 	struct mu3h_sch_bw_info *sch_array;
 	struct mu3c_ippc_regs __iomem *ippc_regs;
+	bool has_ippc;
 	int num_u2_ports;
 	int num_u3_ports;
+	int u3p_dis_msk;
 	struct regulator *vusb33;
 	struct regulator *vbus;
 	struct clk *sys_clk;	/* sys and mac clock */
-	struct clk *wk_deb_p0;	/* port0's wakeup debounce clock */
-	struct clk *wk_deb_p1;
+	struct clk *ref_clk;
+	struct clk *mcu_clk;
+	struct clk *dma_clk;
 	struct regmap *pericfg;
 	struct phy **phys;
 	int num_phys;

@@ -16,7 +16,7 @@
 #include <linux/interrupt.h>
 #include <linux/irq.h>
 
-#include <linux/i2c/adp5588.h>
+#include <linux/platform_data/adp5588.h>
 
 #define DRV_NAME	"adp5588-gpio"
 
@@ -414,7 +414,7 @@ static int adp5588_gpio_probe(struct i2c_client *client,
 		}
 	}
 
-	ret = gpiochip_add_data(&dev->gpio_chip, dev);
+	ret = devm_gpiochip_add_data(&client->dev, &dev->gpio_chip, dev);
 	if (ret)
 		goto err_irq;
 
@@ -456,8 +456,6 @@ static int adp5588_gpio_remove(struct i2c_client *client)
 
 	if (dev->irq_base)
 		free_irq(dev->client->irq, dev);
-
-	gpiochip_remove(&dev->gpio_chip);
 
 	return 0;
 }

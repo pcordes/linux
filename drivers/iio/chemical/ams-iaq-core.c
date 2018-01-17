@@ -141,7 +141,6 @@ err_out:
 
 static const struct iio_info ams_iaqcore_info = {
 	.read_raw	= ams_iaqcore_read_raw,
-	.driver_module	= THIS_MODULE,
 };
 
 static int ams_iaqcore_probe(struct i2c_client *client,
@@ -163,7 +162,7 @@ static int ams_iaqcore_probe(struct i2c_client *client,
 	mutex_init(&data->lock);
 
 	indio_dev->dev.parent = &client->dev;
-	indio_dev->info = &ams_iaqcore_info,
+	indio_dev->info = &ams_iaqcore_info;
 	indio_dev->name = dev_name(&client->dev);
 	indio_dev->modes = INDIO_DIRECT_MODE;
 

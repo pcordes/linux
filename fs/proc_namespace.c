@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0
 /*
  * fs/proc_namespace.c - handling of /proc/<pid>/{mounts,mountinfo,mountstats}
  *
@@ -10,6 +11,8 @@
 #include <linux/nsproxy.h>
 #include <linux/security.h>
 #include <linux/fs_struct.h>
+#include <linux/sched/task.h>
+
 #include "proc/internal.h" /* only for get_proc_task() in ->open() */
 
 #include "pnode.h"
@@ -25,7 +28,7 @@ static unsigned mounts_poll(struct file *file, poll_table *wait)
 
 	poll_wait(file, &p->ns->poll, wait);
 
-	event = ACCESS_ONCE(ns->event);
+	event = READ_ONCE(ns->event);
 	if (m->poll_event != event) {
 		m->poll_event = event;
 		res |= POLLERR | POLLPRI;
@@ -42,10 +45,10 @@ struct proc_fs_info {
 static int show_sb_opts(struct seq_file *m, struct super_block *sb)
 {
 	static const struct proc_fs_info fs_info[] = {
-		{ MS_SYNCHRONOUS, ",sync" },
-		{ MS_DIRSYNC, ",dirsync" },
-		{ MS_MANDLOCK, ",mand" },
-		{ MS_LAZYTIME, ",lazytime" },
+		{ SB_SYNCHRONOUS, ",sync" },
+		{ SB_DIRSYNC, ",dirsync" },
+		{ SB_MANDLOCK, ",mand" },
+		{ SB_LAZYTIME, ",lazytime" },
 		{ 0, NULL }
 	};
 	const struct proc_fs_info *fs_infop;
@@ -176,7 +179,7 @@ static int show_mountinfo(struct seq_file *m, struct vfsmount *mnt)
 	} else {
 		mangle(m, r->mnt_devname ? r->mnt_devname : "none");
 	}
-	seq_puts(m, sb->s_flags & MS_RDONLY ? " ro" : " rw");
+	seq_puts(m, sb_rdonly(sb) ? " ro" : " rw");
 	err = show_sb_opts(m, sb);
 	if (err)
 		goto out;
@@ -199,6 +202,8 @@ static int show_vfsstat(struct seq_file *m, struct vfsmount *mnt)
 	if (sb->s_op->show_devname) {
 		seq_puts(m, "device ");
 		err = sb->s_op->show_devname(m, mnt_path.dentry);
+		if (err)
+			goto out;
 	} else {
 		if (r->mnt_devname) {
 			seq_puts(m, "device ");

@@ -1547,7 +1547,7 @@ il3945_irq_tasklet(struct il_priv *il)
 }
 
 static int
-il3945_get_channels_for_scan(struct il_priv *il, enum ieee80211_band band,
+il3945_get_channels_for_scan(struct il_priv *il, enum nl80211_band band,
 			     u8 is_active, u8 n_probes,
 			     struct il3945_scan_channel *scan_ch,
 			     struct ieee80211_vif *vif)
@@ -1618,7 +1618,7 @@ il3945_get_channels_for_scan(struct il_priv *il, enum ieee80211_band band,
 		/* scan_pwr_info->tpc.dsp_atten; */
 
 		/*scan_pwr_info->tpc.tx_gain; */
-		if (band == IEEE80211_BAND_5GHZ)
+		if (band == NL80211_BAND_5GHZ)
 			scan_ch->tpc.tx_gain = ((1 << 5) | (3 << 3)) | 3;
 		else {
 			scan_ch->tpc.tx_gain = ((1 << 5) | (5 << 3));
@@ -2534,7 +2534,7 @@ il3945_request_scan(struct il_priv *il, struct ieee80211_vif *vif)
 	};
 	struct il3945_scan_cmd *scan;
 	u8 n_probes = 0;
-	enum ieee80211_band band;
+	enum nl80211_band band;
 	bool is_active = false;
 	int ret;
 	u16 len;
@@ -2615,14 +2615,14 @@ il3945_request_scan(struct il_priv *il, struct ieee80211_vif *vif)
 	/* flags + rate selection */
 
 	switch (il->scan_band) {
-	case IEEE80211_BAND_2GHZ:
+	case NL80211_BAND_2GHZ:
 		scan->flags = RXON_FLG_BAND_24G_MSK | RXON_FLG_AUTO_DETECT_MSK;
 		scan->tx_cmd.rate = RATE_1M_PLCP;
-		band = IEEE80211_BAND_2GHZ;
+		band = NL80211_BAND_2GHZ;
 		break;
-	case IEEE80211_BAND_5GHZ:
+	case NL80211_BAND_5GHZ:
 		scan->tx_cmd.rate = RATE_6M_PLCP;
-		band = IEEE80211_BAND_5GHZ;
+		band = NL80211_BAND_5GHZ;
 		break;
 	default:
 		IL_WARN("Invalid scan band\n");
@@ -3429,7 +3429,7 @@ il3945_setup_deferred_work(struct il_priv *il)
 
 	il3945_hw_setup_deferred_work(il);
 
-	setup_timer(&il->watchdog, il_bg_watchdog, (unsigned long)il);
+	timer_setup(&il->watchdog, il_bg_watchdog, 0);
 
 	tasklet_init(&il->irq_tasklet,
 		     (void (*)(unsigned long))il3945_irq_tasklet,
@@ -3464,12 +3464,12 @@ static struct attribute *il3945_sysfs_entries[] = {
 	NULL
 };
 
-static struct attribute_group il3945_attribute_group = {
+static const struct attribute_group il3945_attribute_group = {
 	.name = NULL,		/* put in device directory */
 	.attrs = il3945_sysfs_entries,
 };
 
-static struct ieee80211_ops il3945_mac_ops __read_mostly = {
+static struct ieee80211_ops il3945_mac_ops __ro_after_init = {
 	.tx = il3945_mac_tx,
 	.start = il3945_mac_start,
 	.stop = il3945_mac_stop,
@@ -3507,7 +3507,7 @@ il3945_init_drv(struct il_priv *il)
 
 	il->ieee_channels = NULL;
 	il->ieee_rates = NULL;
-	il->band = IEEE80211_BAND_2GHZ;
+	il->band = NL80211_BAND_2GHZ;
 
 	il->iw_mode = NL80211_IFTYPE_STATION;
 	il->missed_beacon_threshold = IL_MISSED_BEACON_THRESHOLD_DEF;
@@ -3582,15 +3582,17 @@ il3945_setup_mac(struct il_priv *il)
 	/* Default value; 4 EDCA QOS priorities */
 	hw->queues = 4;
 
-	if (il->bands[IEEE80211_BAND_2GHZ].n_channels)
-		il->hw->wiphy->bands[IEEE80211_BAND_2GHZ] =
-		    &il->bands[IEEE80211_BAND_2GHZ];
+	if (il->bands[NL80211_BAND_2GHZ].n_channels)
+		il->hw->wiphy->bands[NL80211_BAND_2GHZ] =
+		    &il->bands[NL80211_BAND_2GHZ];
 
-	if (il->bands[IEEE80211_BAND_5GHZ].n_channels)
-		il->hw->wiphy->bands[IEEE80211_BAND_5GHZ] =
-		    &il->bands[IEEE80211_BAND_5GHZ];
+	if (il->bands[NL80211_BAND_5GHZ].n_channels)
+		il->hw->wiphy->bands[NL80211_BAND_5GHZ] =
+		    &il->bands[NL80211_BAND_5GHZ];
 
 	il_leds_init(il);
+
+	wiphy_ext_feature_set(il->hw->wiphy, NL80211_EXT_FEATURE_CQM_RSSI_LIST);
 
 	ret = ieee80211_register_hw(il->hw);
 	if (ret) {
@@ -3626,15 +3628,6 @@ il3945_pci_probe(struct pci_dev *pdev, const struct pci_device_id *ent)
 	SET_IEEE80211_DEV(hw, &pdev->dev);
 
 	il->cmd_queue = IL39_CMD_QUEUE_NUM;
-
-	/*
-	 * Disabling hardware scan means that mac80211 will perform scans
-	 * "the hard way", rather than using device's scan.
-	 */
-	if (il3945_mod_params.disable_hw_scan) {
-		D_INFO("Disabling hw_scan\n");
-		il3945_mac_ops.hw_scan = NULL;
-	}
 
 	D_INFO("*** LOAD DRIVER ***\n");
 	il->cfg = cfg;
@@ -3761,7 +3754,7 @@ il3945_pci_probe(struct pci_dev *pdev, const struct pci_device_id *ent)
 		goto out_release_irq;
 	}
 
-	il_set_rxon_channel(il, &il->bands[IEEE80211_BAND_2GHZ].channels[5]);
+	il_set_rxon_channel(il, &il->bands[NL80211_BAND_2GHZ].channels[5]);
 	il3945_setup_deferred_work(il);
 	il3945_setup_handlers(il);
 	il_power_initialize(il);
@@ -3912,6 +3905,15 @@ il3945_init(void)
 	int ret;
 	pr_info(DRV_DESCRIPTION ", " DRV_VERSION "\n");
 	pr_info(DRV_COPYRIGHT "\n");
+
+	/*
+	 * Disabling hardware scan means that mac80211 will perform scans
+	 * "the hard way", rather than using device's scan.
+	 */
+	if (il3945_mod_params.disable_hw_scan) {
+		pr_info("hw_scan is disabled\n");
+		il3945_mac_ops.hw_scan = NULL;
+	}
 
 	ret = il3945_rate_control_register();
 	if (ret) {

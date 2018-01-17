@@ -5,7 +5,7 @@
  *****************************************************************************/
 
 /*
- * Copyright (C) 2000 - 2016, Intel Corp.
+ * Copyright (C) 2000 - 2017, Intel Corp.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -46,7 +46,7 @@
 
 /* Current ACPICA subsystem version in YYYYMMDD format */
 
-#define ACPI_CA_VERSION                 0x20160108
+#define ACPI_CA_VERSION                 0x20170831
 
 #include <acpi/acconfig.h>
 #include <acpi/actypes.h>
@@ -160,13 +160,14 @@ ACPI_INIT_GLOBAL(u8, acpi_gbl_create_osi_method, TRUE);
 ACPI_INIT_GLOBAL(u8, acpi_gbl_use_default_register_widths, TRUE);
 
 /*
- * Whether or not to verify the table checksum before installation. Set
- * this to TRUE to verify the table checksum before install it to the table
- * manager. Note that enabling this option causes errors to happen in some
- * OSPMs during early initialization stages. Default behavior is to do such
- * verification.
+ * Whether or not to validate (map) an entire table to verify
+ * checksum/duplication in early stage before install. Set this to TRUE to
+ * allow early table validation before install it to the table manager.
+ * Note that enabling this option causes errors to happen in some OSPMs
+ * during early initialization stages. Default behavior is to allow such
+ * validation.
  */
-ACPI_INIT_GLOBAL(u8, acpi_gbl_verify_table_checksum, TRUE);
+ACPI_INIT_GLOBAL(u8, acpi_gbl_enable_table_validation, TRUE);
 
 /*
  * Optionally enable output from the AML Debug Object.
@@ -193,6 +194,13 @@ ACPI_INIT_GLOBAL(u8, acpi_gbl_do_not_use_xsdt, FALSE);
  * Optionally support group module level code.
  */
 ACPI_INIT_GLOBAL(u8, acpi_gbl_group_module_level_code, TRUE);
+
+/*
+ * Optionally support module level code by parsing the entire table as
+ * a term_list. Default is FALSE, do not execute entire table until some
+ * lock order issues are fixed.
+ */
+ACPI_INIT_GLOBAL(u8, acpi_gbl_parse_table_as_term_list, FALSE);
 
 /*
  * Optionally use 32-bit FADT addresses if and when there is a conflict
@@ -250,6 +258,13 @@ ACPI_INIT_GLOBAL(u8, acpi_gbl_osi_data, 0);
  * a reduced HW machine, and that flag is duplicated here for convenience.
  */
 ACPI_INIT_GLOBAL(u8, acpi_gbl_reduced_hardware, FALSE);
+
+/*
+ * Maximum number of While() loop iterations before forced method abort.
+ * This mechanism is intended to prevent infinite loops during interpreter
+ * execution within a host kernel.
+ */
+ACPI_INIT_GLOBAL(u32, acpi_gbl_max_loop_iterations, ACPI_MAX_LOOP_COUNT);
 
 /*
  * This mechanism is used to trace a specified AML method. The method is
@@ -416,18 +431,19 @@ ACPI_GLOBAL(u8, acpi_gbl_system_awake_and_running);
 /*
  * Initialization
  */
-ACPI_EXTERNAL_RETURN_STATUS(acpi_status __init
+ACPI_EXTERNAL_RETURN_STATUS(acpi_status ACPI_INIT_FUNCTION
 			    acpi_initialize_tables(struct acpi_table_desc
 						   *initial_storage,
 						   u32 initial_table_count,
 						   u8 allow_resize))
-ACPI_EXTERNAL_RETURN_STATUS(acpi_status __init acpi_initialize_subsystem(void))
-
-ACPI_EXTERNAL_RETURN_STATUS(acpi_status __init acpi_enable_subsystem(u32 flags))
-
-ACPI_EXTERNAL_RETURN_STATUS(acpi_status __init
-			    acpi_initialize_objects(u32 flags))
-ACPI_EXTERNAL_RETURN_STATUS(acpi_status __init acpi_terminate(void))
+ACPI_EXTERNAL_RETURN_STATUS(acpi_status ACPI_INIT_FUNCTION
+			     acpi_initialize_subsystem(void))
+ACPI_EXTERNAL_RETURN_STATUS(acpi_status ACPI_INIT_FUNCTION
+			     acpi_enable_subsystem(u32 flags))
+ACPI_EXTERNAL_RETURN_STATUS(acpi_status ACPI_INIT_FUNCTION
+			     acpi_initialize_objects(u32 flags))
+ACPI_EXTERNAL_RETURN_STATUS(acpi_status ACPI_INIT_FUNCTION
+			     acpi_terminate(void))
 
 /*
  * Miscellaneous global interfaces
@@ -467,7 +483,7 @@ ACPI_EXTERNAL_RETURN_STATUS(acpi_status
 /*
  * ACPI table load/unload interfaces
  */
-ACPI_EXTERNAL_RETURN_STATUS(acpi_status __init
+ACPI_EXTERNAL_RETURN_STATUS(acpi_status ACPI_INIT_FUNCTION
 			    acpi_install_table(acpi_physical_address address,
 					       u8 physical))
 
@@ -476,16 +492,19 @@ ACPI_EXTERNAL_RETURN_STATUS(acpi_status
 
 ACPI_EXTERNAL_RETURN_STATUS(acpi_status
 			    acpi_unload_parent_table(acpi_handle object))
-ACPI_EXTERNAL_RETURN_STATUS(acpi_status __init acpi_load_tables(void))
+
+ACPI_EXTERNAL_RETURN_STATUS(acpi_status ACPI_INIT_FUNCTION
+			    acpi_load_tables(void))
 
 /*
  * ACPI table manipulation interfaces
  */
-ACPI_EXTERNAL_RETURN_STATUS(acpi_status __init acpi_reallocate_root_table(void))
+ACPI_EXTERNAL_RETURN_STATUS(acpi_status ACPI_INIT_FUNCTION
+			    acpi_reallocate_root_table(void))
 
-ACPI_EXTERNAL_RETURN_STATUS(acpi_status __init
-			    acpi_find_root_pointer(acpi_physical_address *
-						   rsdp_address))
+ACPI_EXTERNAL_RETURN_STATUS(acpi_status ACPI_INIT_FUNCTION
+			    acpi_find_root_pointer(acpi_physical_address
+						   *rsdp_address))
 ACPI_EXTERNAL_RETURN_STATUS(acpi_status
 			     acpi_get_table_header(acpi_string signature,
 						   u32 instance,
@@ -495,10 +514,12 @@ ACPI_EXTERNAL_RETURN_STATUS(acpi_status
 			     acpi_get_table(acpi_string signature, u32 instance,
 					    struct acpi_table_header
 					    **out_table))
+ACPI_EXTERNAL_RETURN_VOID(void acpi_put_table(struct acpi_table_header *table))
+
 ACPI_EXTERNAL_RETURN_STATUS(acpi_status
-			     acpi_get_table_by_index(u32 table_index,
-						     struct acpi_table_header
-						     **out_table))
+			    acpi_get_table_by_index(u32 table_index,
+						    struct acpi_table_header
+						    **out_table))
 ACPI_EXTERNAL_RETURN_STATUS(acpi_status
 			     acpi_install_table_handler(acpi_table_handler
 							handler, void *context))
@@ -530,7 +551,7 @@ ACPI_EXTERNAL_RETURN_STATUS(acpi_status
 ACPI_EXTERNAL_RETURN_STATUS(acpi_status
 			     acpi_get_handle(acpi_handle parent,
 					     acpi_string pathname,
-					     acpi_handle * ret_handle))
+					     acpi_handle *ret_handle))
 ACPI_EXTERNAL_RETURN_STATUS(acpi_status
 			     acpi_attach_data(acpi_handle object,
 					      acpi_object_handler handler,
@@ -575,15 +596,15 @@ ACPI_EXTERNAL_RETURN_STATUS(acpi_status
 			    acpi_get_next_object(acpi_object_type type,
 						 acpi_handle parent,
 						 acpi_handle child,
-						 acpi_handle * out_handle))
+						 acpi_handle *out_handle))
 
 ACPI_EXTERNAL_RETURN_STATUS(acpi_status
 			    acpi_get_type(acpi_handle object,
-					  acpi_object_type * out_type))
+					  acpi_object_type *out_type))
 
 ACPI_EXTERNAL_RETURN_STATUS(acpi_status
 			    acpi_get_parent(acpi_handle object,
-					    acpi_handle * out_handle))
+					    acpi_handle *out_handle))
 
 /*
  * Handler interfaces
@@ -732,6 +753,10 @@ ACPI_HW_DEPENDENT_RETURN_STATUS(acpi_status
 						u32 gpe_number))
 
 ACPI_HW_DEPENDENT_RETURN_STATUS(acpi_status
+				acpi_mask_gpe(acpi_handle gpe_device,
+					      u32 gpe_number, u8 is_masked))
+
+ACPI_HW_DEPENDENT_RETURN_STATUS(acpi_status
 				acpi_mark_gpe_for_wake(acpi_handle gpe_device,
 						       u32 gpe_number))
 
@@ -755,7 +780,7 @@ ACPI_HW_DEPENDENT_RETURN_STATUS(acpi_status acpi_enable_all_wakeup_gpes(void))
 
 ACPI_HW_DEPENDENT_RETURN_STATUS(acpi_status
 				acpi_get_gpe_device(u32 gpe_index,
-						    acpi_handle * gpe_device))
+						    acpi_handle *gpe_device))
 
 ACPI_HW_DEPENDENT_RETURN_STATUS(acpi_status
 				acpi_install_gpe_block(acpi_handle gpe_device,
@@ -771,8 +796,8 @@ ACPI_HW_DEPENDENT_RETURN_STATUS(acpi_status
  * Resource interfaces
  */
 typedef
-acpi_status(*acpi_walk_resource_callback) (struct acpi_resource * resource,
-					   void *context);
+acpi_status (*acpi_walk_resource_callback) (struct acpi_resource * resource,
+					    void *context);
 
 ACPI_EXTERNAL_RETURN_STATUS(acpi_status
 			    acpi_get_vendor_resource(acpi_handle device,
@@ -897,11 +922,9 @@ ACPI_MSG_DEPENDENT_RETURN_VOID(ACPI_PRINTF_LIKE(3)
 				acpi_warning(const char *module_name,
 					     u32 line_number,
 					     const char *format, ...))
-ACPI_MSG_DEPENDENT_RETURN_VOID(ACPI_PRINTF_LIKE(3)
+ACPI_MSG_DEPENDENT_RETURN_VOID(ACPI_PRINTF_LIKE(1)
 				void ACPI_INTERNAL_VAR_XFACE
-				acpi_info(const char *module_name,
-					  u32 line_number,
-					  const char *format, ...))
+				acpi_info(const char *format, ...))
 ACPI_MSG_DEPENDENT_RETURN_VOID(ACPI_PRINTF_LIKE(3)
 				void ACPI_INTERNAL_VAR_XFACE
 				acpi_bios_error(const char *module_name,
@@ -937,25 +960,14 @@ ACPI_DBG_DEPENDENT_RETURN_VOID(void
 			       acpi_trace_point(acpi_trace_event_type type,
 						u8 begin,
 						u8 *aml, char *pathname))
-ACPI_APP_DEPENDENT_RETURN_VOID(ACPI_PRINTF_LIKE(1)
-				void ACPI_INTERNAL_VAR_XFACE
-				acpi_log_error(const char *format, ...))
- acpi_status acpi_initialize_debugger(void);
+
+acpi_status acpi_initialize_debugger(void);
 
 void acpi_terminate_debugger(void);
 
 /*
  * Divergences
  */
-ACPI_GLOBAL(u8, acpi_gbl_permanent_mmap);
-
-ACPI_EXTERNAL_RETURN_STATUS(acpi_status
-			    acpi_get_table_with_size(acpi_string signature,
-						     u32 instance,
-						     struct acpi_table_header
-						     **out_table,
-						     acpi_size *tbl_size))
-
 ACPI_EXTERNAL_RETURN_STATUS(acpi_status
 			    acpi_get_data_full(acpi_handle object,
 					       acpi_object_handler handler,

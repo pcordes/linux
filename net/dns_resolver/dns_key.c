@@ -224,7 +224,7 @@ static int dns_resolver_match_preparse(struct key_match_data *match_data)
 static void dns_resolver_describe(const struct key *key, struct seq_file *m)
 {
 	seq_puts(m, key->description);
-	if (key_is_instantiated(key)) {
+	if (key_is_positive(key)) {
 		int err = PTR_ERR(key->payload.data[dns_key_error]);
 
 		if (err)
@@ -281,7 +281,7 @@ static int __init init_dns_resolver(void)
 				GLOBAL_ROOT_UID, GLOBAL_ROOT_GID, cred,
 				(KEY_POS_ALL & ~KEY_POS_SETATTR) |
 				KEY_USR_VIEW | KEY_USR_READ,
-				KEY_ALLOC_NOT_IN_QUOTA, NULL);
+				KEY_ALLOC_NOT_IN_QUOTA, NULL, NULL);
 	if (IS_ERR(keyring)) {
 		ret = PTR_ERR(keyring);
 		goto failed_put_cred;

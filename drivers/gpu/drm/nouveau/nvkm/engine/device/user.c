@@ -102,6 +102,7 @@ nvkm_udevice_info(struct nvkm_udevice *udev, void *data, u32 size)
 	case NV_C0: args->v0.family = NV_DEVICE_INFO_V0_FERMI; break;
 	case NV_E0: args->v0.family = NV_DEVICE_INFO_V0_KEPLER; break;
 	case GM100: args->v0.family = NV_DEVICE_INFO_V0_MAXWELL; break;
+	case GP100: args->v0.family = NV_DEVICE_INFO_V0_PASCAL; break;
 	default:
 		args->v0.family = 0;
 		break;
@@ -205,10 +206,12 @@ nvkm_udevice_wr32(struct nvkm_object *object, u64 addr, u32 data)
 }
 
 static int
-nvkm_udevice_map(struct nvkm_object *object, u64 *addr, u32 *size)
+nvkm_udevice_map(struct nvkm_object *object, void *argv, u32 argc,
+		 enum nvkm_object_map *type, u64 *addr, u64 *size)
 {
 	struct nvkm_udevice *udev = nvkm_udevice(object);
 	struct nvkm_device *device = udev->device;
+	*type = NVKM_OBJECT_MAP_IO;
 	*addr = device->func->resource_addr(device, 0);
 	*size = device->func->resource_size(device, 0);
 	return 0;
@@ -291,6 +294,11 @@ nvkm_udevice_child_get(struct nvkm_object *object, int index,
 	if (!sclass) {
 		switch (index) {
 		case 0: sclass = &nvkm_control_oclass; break;
+		case 1:
+			if (!device->mmu)
+				return -EINVAL;
+			sclass = &device->mmu->user;
+			break;
 		default:
 			return -EINVAL;
 		}
@@ -325,7 +333,7 @@ nvkm_udevice = {
 	.sclass = nvkm_udevice_child_get,
 };
 
-int
+static int
 nvkm_udevice_new(const struct nvkm_oclass *oclass, void *data, u32 size,
 		 struct nvkm_object **pobject)
 {

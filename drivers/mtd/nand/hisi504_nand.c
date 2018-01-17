@@ -19,7 +19,6 @@
  * GNU General Public License for more details.
  */
 #include <linux/of.h>
-#include <linux/of_mtd.h>
 #include <linux/mtd/mtd.h>
 #include <linux/sizes.h>
 #include <linux/clk.h>
@@ -27,7 +26,7 @@
 #include <linux/module.h>
 #include <linux/delay.h>
 #include <linux/interrupt.h>
-#include <linux/mtd/nand.h>
+#include <linux/mtd/rawnand.h>
 #include <linux/dma-mapping.h>
 #include <linux/platform_device.h>
 #include <linux/mtd/partitions.h>
@@ -433,8 +432,7 @@ static void set_addr(struct mtd_info *mtd, int column, int page_addr)
 		host->addr_value[0] |= (page_addr & 0xffff)
 			<< (host->addr_cycle * 8);
 		host->addr_cycle    += 2;
-		/* One more address cycle for devices > 128MiB */
-		if (chip->chipsize > (128 << 20)) {
+		if (chip->options & NAND_ROW_ADDR_3) {
 			host->addr_cycle += 1;
 			if (host->command == NAND_CMD_ERASE1)
 				host->addr_value[0] |= ((page_addr >> 16) & 0xff) << 16;
@@ -631,9 +629,28 @@ static void hisi_nfc_host_init(struct hinfc_host *host)
 	hinfc_write(host, HINFC504_INTEN_DMA, HINFC504_INTEN);
 }
 
-static struct nand_ecclayout nand_ecc_2K_16bits = {
-	.oobavail = 6,
-	.oobfree = { {2, 6} },
+static int hisi_ooblayout_ecc(struct mtd_info *mtd, int section,
+			      struct mtd_oob_region *oobregion)
+{
+	/* FIXME: add ECC bytes position */
+	return -ENOTSUPP;
+}
+
+static int hisi_ooblayout_free(struct mtd_info *mtd, int section,
+			       struct mtd_oob_region *oobregion)
+{
+	if (section)
+		return -ERANGE;
+
+	oobregion->offset = 2;
+	oobregion->length = 6;
+
+	return 0;
+}
+
+static const struct mtd_ooblayout_ops hisi_ooblayout_ops = {
+	.ecc = hisi_ooblayout_ecc,
+	.free = hisi_ooblayout_free,
 };
 
 static int hisi_nfc_ecc_probe(struct hinfc_host *host)
@@ -643,10 +660,9 @@ static int hisi_nfc_ecc_probe(struct hinfc_host *host)
 	struct device *dev = host->dev;
 	struct nand_chip *chip = &host->chip;
 	struct mtd_info *mtd = nand_to_mtd(chip);
-	struct device_node *np = host->dev->of_node;
 
-	size = of_get_nand_ecc_step_size(np);
-	strength = of_get_nand_ecc_strength(np);
+	size = chip->ecc.size;
+	strength = chip->ecc.strength;
 	if (size != 1024) {
 		dev_err(dev, "error ecc size: %d\n", size);
 		return -EINVAL;
@@ -669,7 +685,7 @@ static int hisi_nfc_ecc_probe(struct hinfc_host *host)
 	case 16:
 		ecc_bits = 6;
 		if (mtd->writesize == 2048)
-			chip->ecc.layout = &nand_ecc_2K_16bits;
+			mtd_set_ooblayout(mtd, &hisi_ooblayout_ops);
 
 		/* TODO: add more page size support */
 		break;
@@ -696,7 +712,7 @@ static int hisi_nfc_ecc_probe(struct hinfc_host *host)
 
 static int hisi_nfc_probe(struct platform_device *pdev)
 {
-	int ret = 0, irq, buswidth, flag, max_chips = HINFC504_MAX_CHIP;
+	int ret = 0, irq, flag, max_chips = HINFC504_MAX_CHIP;
 	struct device *dev = &pdev->dev;
 	struct hinfc_host *host;
 	struct nand_chip  *chip;
@@ -747,12 +763,8 @@ static int hisi_nfc_probe(struct platform_device *pdev)
 	chip->write_buf		= hisi_nfc_write_buf;
 	chip->read_buf		= hisi_nfc_read_buf;
 	chip->chip_delay	= HINFC504_CHIP_DELAY;
-
-	chip->ecc.mode = of_get_nand_ecc_mode(np);
-
-	buswidth = of_get_nand_bus_width(np);
-	if (buswidth == 16)
-		chip->options |= NAND_BUSWIDTH_16;
+	chip->onfi_set_features	= nand_onfi_get_set_features_notsupp;
+	chip->onfi_get_features	= nand_onfi_get_set_features_notsupp;
 
 	hisi_nfc_host_init(host);
 
@@ -763,10 +775,8 @@ static int hisi_nfc_probe(struct platform_device *pdev)
 	}
 
 	ret = nand_scan_ident(mtd, max_chips, NULL);
-	if (ret) {
-		ret = -ENODEV;
+	if (ret)
 		goto err_res;
-	}
 
 	host->buffer = dmam_alloc_coherent(dev, mtd->writesize + mtd->oobsize,
 		&host->dma_buffer, GFP_KERNEL);

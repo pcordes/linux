@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: GPL-2.0
 #
 # Makefile for the industrial I/O core.
 #
@@ -10,7 +11,6 @@ obj-y += frequency/
 obj-y += gyro/
 obj-y += impedance-analyzer/
 obj-y += light/
-obj-y += magnetometer/
 obj-y += meter/
 obj-y += resolver/
 obj-y += trigger/

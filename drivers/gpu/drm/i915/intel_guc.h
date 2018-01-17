@@ -1,5 +1,5 @@
 /*
- * Copyright © 2014 Intel Corporation
+ * Copyright © 2014-2017 Intel Corporation
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the "Software"),
@@ -21,106 +21,100 @@
  * IN THE SOFTWARE.
  *
  */
+
 #ifndef _INTEL_GUC_H_
 #define _INTEL_GUC_H_
 
+#include "intel_uncore.h"
+#include "intel_guc_fw.h"
 #include "intel_guc_fwif.h"
+#include "intel_guc_ct.h"
+#include "intel_guc_log.h"
+#include "intel_uc_fw.h"
 #include "i915_guc_reg.h"
-
-struct i915_guc_client {
-	struct drm_i915_gem_object *client_obj;
-	struct intel_context *owner;
-	struct intel_guc *guc;
-	uint32_t priority;
-	uint32_t ctx_index;
-
-	uint32_t proc_desc_offset;
-	uint32_t doorbell_offset;
-	uint32_t cookie;
-	uint16_t doorbell_id;
-	uint16_t padding;		/* Maintain alignment		*/
-
-	uint32_t wq_offset;
-	uint32_t wq_size;
-	uint32_t wq_tail;
-
-	/* GuC submission statistics & status */
-	uint64_t submissions[I915_NUM_RINGS];
-	uint32_t q_fail;
-	uint32_t b_fail;
-	int retcode;
-};
-
-enum intel_guc_fw_status {
-	GUC_FIRMWARE_FAIL = -1,
-	GUC_FIRMWARE_NONE = 0,
-	GUC_FIRMWARE_PENDING,
-	GUC_FIRMWARE_SUCCESS
-};
+#include "i915_vma.h"
 
 /*
- * This structure encapsulates all the data needed during the process
- * of fetching, caching, and loading the firmware image into the GuC.
+ * Top level structure of GuC. It handles firmware loading and manages client
+ * pool and doorbells. intel_guc owns a i915_guc_client to replace the legacy
+ * ExecList submission.
  */
-struct intel_guc_fw {
-	struct drm_device *		guc_dev;
-	const char *			guc_fw_path;
-	size_t				guc_fw_size;
-	struct drm_i915_gem_object *	guc_fw_obj;
-	enum intel_guc_fw_status	guc_fw_fetch_status;
-	enum intel_guc_fw_status	guc_fw_load_status;
-
-	uint16_t			guc_fw_major_wanted;
-	uint16_t			guc_fw_minor_wanted;
-	uint16_t			guc_fw_major_found;
-	uint16_t			guc_fw_minor_found;
-
-	uint32_t header_size;
-	uint32_t header_offset;
-	uint32_t rsa_size;
-	uint32_t rsa_offset;
-	uint32_t ucode_size;
-	uint32_t ucode_offset;
-};
-
 struct intel_guc {
-	struct intel_guc_fw guc_fw;
-	uint32_t log_flags;
-	struct drm_i915_gem_object *log_obj;
+	struct intel_uc_fw fw;
+	struct intel_guc_log log;
+	struct intel_guc_ct ct;
 
-	struct drm_i915_gem_object *ctx_pool_obj;
-	struct ida ctx_ids;
+	/* Log snapshot if GuC errors during load */
+	struct drm_i915_gem_object *load_err_log;
+
+	/* intel_guc_recv interrupt related state */
+	bool interrupts_enabled;
+
+	struct i915_vma *ads_vma;
+	struct i915_vma *stage_desc_pool;
+	void *stage_desc_pool_vaddr;
+	struct ida stage_ids;
 
 	struct i915_guc_client *execbuf_client;
 
-	DECLARE_BITMAP(doorbell_bitmap, GUC_MAX_DOORBELLS);
-	uint32_t db_cacheline;		/* Cyclic counter mod pagesize	*/
+	DECLARE_BITMAP(doorbell_bitmap, GUC_NUM_DOORBELLS);
+	/* Cyclic counter mod pagesize	*/
+	u32 db_cacheline;
 
-	/* Action status & statistics */
-	uint64_t action_count;		/* Total commands issued	*/
-	uint32_t action_cmd;		/* Last command word		*/
-	uint32_t action_status;		/* Last return status		*/
-	uint32_t action_fail;		/* Total number of failures	*/
-	int32_t action_err;		/* Last error code		*/
+	/* GuC's FW specific registers used in MMIO send */
+	struct {
+		u32 base;
+		unsigned int count;
+		enum forcewake_domains fw_domains;
+	} send_regs;
 
-	uint64_t submissions[I915_NUM_RINGS];
-	uint32_t last_seqno[I915_NUM_RINGS];
+	/* To serialize the intel_guc_send actions */
+	struct mutex send_mutex;
+
+	/* GuC's FW specific send function */
+	int (*send)(struct intel_guc *guc, const u32 *data, u32 len);
+
+	/* GuC's FW specific notify function */
+	void (*notify)(struct intel_guc *guc);
 };
 
-/* intel_guc_loader.c */
-extern void intel_guc_ucode_init(struct drm_device *dev);
-extern int intel_guc_ucode_load(struct drm_device *dev);
-extern void intel_guc_ucode_fini(struct drm_device *dev);
-extern const char *intel_guc_fw_status_repr(enum intel_guc_fw_status status);
-extern int intel_guc_suspend(struct drm_device *dev);
-extern int intel_guc_resume(struct drm_device *dev);
+static
+inline int intel_guc_send(struct intel_guc *guc, const u32 *action, u32 len)
+{
+	return guc->send(guc, action, len);
+}
 
-/* i915_guc_submission.c */
-int i915_guc_submission_init(struct drm_device *dev);
-int i915_guc_submission_enable(struct drm_device *dev);
-int i915_guc_submit(struct i915_guc_client *client,
-		    struct drm_i915_gem_request *rq);
-void i915_guc_submission_disable(struct drm_device *dev);
-void i915_guc_submission_fini(struct drm_device *dev);
+static inline void intel_guc_notify(struct intel_guc *guc)
+{
+	guc->notify(guc);
+}
+
+/*
+ * GuC does not allow any gfx GGTT address that falls into range [0, WOPCM_TOP),
+ * which is reserved for Boot ROM, SRAM and WOPCM. Currently this top address is
+ * 512K. In order to exclude 0-512K address space from GGTT, all gfx objects
+ * used by GuC is pinned with PIN_OFFSET_BIAS along with size of WOPCM.
+ */
+static inline u32 guc_ggtt_offset(struct i915_vma *vma)
+{
+	u32 offset = i915_ggtt_offset(vma);
+
+	GEM_BUG_ON(offset < GUC_WOPCM_TOP);
+	GEM_BUG_ON(range_overflows_t(u64, offset, vma->size, GUC_GGTT_TOP));
+
+	return offset;
+}
+
+void intel_guc_init_early(struct intel_guc *guc);
+void intel_guc_init_send_regs(struct intel_guc *guc);
+void intel_guc_init_params(struct intel_guc *guc);
+int intel_guc_send_nop(struct intel_guc *guc, const u32 *action, u32 len);
+int intel_guc_send_mmio(struct intel_guc *guc, const u32 *action, u32 len);
+int intel_guc_sample_forcewake(struct intel_guc *guc);
+int intel_guc_auth_huc(struct intel_guc *guc, u32 rsa_offset);
+int intel_guc_suspend(struct drm_i915_private *dev_priv);
+int intel_guc_resume(struct drm_i915_private *dev_priv);
+struct i915_vma *intel_guc_allocate_vma(struct intel_guc *guc, u32 size);
+u32 intel_guc_wopcm_size(struct drm_i915_private *dev_priv);
 
 #endif

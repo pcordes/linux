@@ -67,18 +67,40 @@ module_param(reliable_mode, uint, 0);
 MODULE_PARM_DESC(reliable_mode, "Set the docg3 mode (0=normal MLC, 1=fast, "
 		 "2=reliable) : MLC normal operations are in normal mode");
 
-/**
- * struct docg3_oobinfo - DiskOnChip G3 OOB layout
- * @eccbytes: 8 bytes are used (1 for Hamming ECC, 7 for BCH ECC)
- * @eccpos: ecc positions (byte 7 is Hamming ECC, byte 8-14 are BCH ECC)
- * @oobfree: free pageinfo bytes (byte 0 until byte 6, byte 15
- * @oobavail: 8 available bytes remaining after ECC toll
- */
-static struct nand_ecclayout docg3_oobinfo = {
-	.eccbytes = 8,
-	.eccpos = {7, 8, 9, 10, 11, 12, 13, 14},
-	.oobfree = {{0, 7}, {15, 1} },
-	.oobavail = 8,
+static int docg3_ooblayout_ecc(struct mtd_info *mtd, int section,
+			       struct mtd_oob_region *oobregion)
+{
+	if (section)
+		return -ERANGE;
+
+	/* byte 7 is Hamming ECC, byte 8-14 are BCH ECC */
+	oobregion->offset = 7;
+	oobregion->length = 8;
+
+	return 0;
+}
+
+static int docg3_ooblayout_free(struct mtd_info *mtd, int section,
+				struct mtd_oob_region *oobregion)
+{
+	if (section > 1)
+		return -ERANGE;
+
+	/* free bytes: byte 0 until byte 6, byte 15 */
+	if (!section) {
+		oobregion->offset = 0;
+		oobregion->length = 7;
+	} else {
+		oobregion->offset = 15;
+		oobregion->length = 1;
+	}
+
+	return 0;
+}
+
+static const struct mtd_ooblayout_ops nand_ooblayout_docg3_ops = {
+	.ecc = docg3_ooblayout_ecc,
+	.free = docg3_ooblayout_free,
 };
 
 static inline u8 doc_readb(struct docg3 *docg3, u16 reg)
@@ -1438,7 +1460,7 @@ static int doc_write_oob(struct mtd_info *mtd, loff_t ofs,
 		oobdelta = mtd->oobsize;
 		break;
 	case MTD_OPS_AUTO_OOB:
-		oobdelta = mtd->ecclayout->oobavail;
+		oobdelta = mtd->oobavail;
 		break;
 	default:
 		return -EINVAL;
@@ -1787,37 +1809,27 @@ static int dbg_protection_show(struct seq_file *s, void *p)
 }
 DEBUGFS_RO_ATTR(protection, dbg_protection_show);
 
-static int __init doc_dbg_register(struct docg3 *docg3)
+static void __init doc_dbg_register(struct mtd_info *floor)
 {
-	struct dentry *root, *entry;
+	struct dentry *root = floor->dbg.dfs_dir;
+	struct docg3 *docg3 = floor->priv;
 
-	root = debugfs_create_dir("docg3", NULL);
-	if (!root)
-		return -ENOMEM;
-
-	entry = debugfs_create_file("flashcontrol", S_IRUSR, root, docg3,
-				  &flashcontrol_fops);
-	if (entry)
-		entry = debugfs_create_file("asic_mode", S_IRUSR, root,
-					    docg3, &asic_mode_fops);
-	if (entry)
-		entry = debugfs_create_file("device_id", S_IRUSR, root,
-					    docg3, &device_id_fops);
-	if (entry)
-		entry = debugfs_create_file("protection", S_IRUSR, root,
-					    docg3, &protection_fops);
-	if (entry) {
-		docg3->debugfs_root = root;
-		return 0;
-	} else {
-		debugfs_remove_recursive(root);
-		return -ENOMEM;
+	if (IS_ERR_OR_NULL(root)) {
+		if (IS_ENABLED(CONFIG_DEBUG_FS) &&
+		    !IS_ENABLED(CONFIG_MTD_PARTITIONED_MASTER))
+			dev_warn(floor->dev.parent,
+				 "CONFIG_MTD_PARTITIONED_MASTER must be enabled to expose debugfs stuff\n");
+		return;
 	}
-}
 
-static void doc_dbg_unregister(struct docg3 *docg3)
-{
-	debugfs_remove_recursive(docg3->debugfs_root);
+	debugfs_create_file("docg3_flashcontrol", S_IRUSR, root, docg3,
+			    &flashcontrol_fops);
+	debugfs_create_file("docg3_asic_mode", S_IRUSR, root, docg3,
+			    &asic_mode_fops);
+	debugfs_create_file("docg3_device_id", S_IRUSR, root, docg3,
+			    &device_id_fops);
+	debugfs_create_file("docg3_protection", S_IRUSR, root, docg3,
+			    &protection_fops);
 }
 
 /**
@@ -1859,7 +1871,8 @@ static int __init doc_set_driver_info(int chip_id, struct mtd_info *mtd)
 	mtd->_read_oob = doc_read_oob;
 	mtd->_write_oob = doc_write_oob;
 	mtd->_block_isbad = doc_block_isbad;
-	mtd->ecclayout = &docg3_oobinfo;
+	mtd_set_ooblayout(mtd, &nand_ooblayout_docg3_ops);
+	mtd->oobavail = 8;
 	mtd->ecc_strength = DOC_ECC_BCH_T;
 
 	return 0;
@@ -2091,6 +2104,8 @@ static int __init docg3_probe(struct platform_device *pdev)
 						0);
 		if (ret)
 			goto err_probe;
+
+		doc_dbg_register(cascade->floors[floor]);
 	}
 
 	ret = doc_register_sysfs(pdev, cascade);
@@ -2098,7 +2113,6 @@ static int __init docg3_probe(struct platform_device *pdev)
 		goto err_probe;
 
 	platform_set_drvdata(pdev, cascade);
-	doc_dbg_register(cascade->floors[0]->priv);
 	return 0;
 
 notfound:
@@ -2125,7 +2139,6 @@ static int docg3_release(struct platform_device *pdev)
 	int floor;
 
 	doc_unregister_sysfs(pdev, cascade);
-	doc_dbg_unregister(docg3);
 	for (floor = 0; floor < DOC_MAX_NBFLOORS; floor++)
 		if (cascade->floors[floor])
 			doc_release_device(cascade->floors[floor]);

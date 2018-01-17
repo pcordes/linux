@@ -1,5 +1,5 @@
-/* Intel Ethernet Switch Host Interface Driver
- * Copyright(c) 2013 - 2015 Intel Corporation.
+/* Intel(R) Ethernet Switch Host Interface Driver
+ * Copyright(c) 2013 - 2017 Intel Corporation.
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms and conditions of the GNU General Public License,
@@ -1586,7 +1586,7 @@ s32 fm10k_pfvf_mbx_init(struct fm10k_hw *hw, struct fm10k_mbx_info *mbx,
 			mbx->mbmem_reg = FM10K_MBMEM_VF(id, 0);
 			break;
 		}
-		/* fallthough */
+		/* fall through */
 	default:
 		return FM10K_MBX_ERR_NO_MBX;
 	}
@@ -2011,9 +2011,10 @@ static void fm10k_sm_mbx_create_reply(struct fm10k_hw *hw,
  *  function can also be used to respond to an error as the connection
  *  resetting would also be a means of dealing with errors.
  **/
-static void fm10k_sm_mbx_process_reset(struct fm10k_hw *hw,
-				       struct fm10k_mbx_info *mbx)
+static s32 fm10k_sm_mbx_process_reset(struct fm10k_hw *hw,
+				      struct fm10k_mbx_info *mbx)
 {
+	s32 err = 0;
 	const enum fm10k_mbx_state state = mbx->state;
 
 	switch (state) {
@@ -2026,6 +2027,7 @@ static void fm10k_sm_mbx_process_reset(struct fm10k_hw *hw,
 	case FM10K_STATE_OPEN:
 		/* flush any incomplete work */
 		fm10k_sm_mbx_connect_reset(mbx);
+		err = FM10K_ERR_RESET_REQUESTED;
 		break;
 	case FM10K_STATE_CONNECT:
 		/* Update remote value to match local value */
@@ -2035,6 +2037,8 @@ static void fm10k_sm_mbx_process_reset(struct fm10k_hw *hw,
 	}
 
 	fm10k_sm_mbx_create_reply(hw, mbx, mbx->tail);
+
+	return err;
 }
 
 /**
@@ -2115,7 +2119,7 @@ static s32 fm10k_sm_mbx_process(struct fm10k_hw *hw,
 
 	switch (FM10K_MSG_HDR_FIELD_GET(mbx->mbx_hdr, SM_VER)) {
 	case 0:
-		fm10k_sm_mbx_process_reset(hw, mbx);
+		err = fm10k_sm_mbx_process_reset(hw, mbx);
 		break;
 	case FM10K_SM_MBX_VERSION:
 		err = fm10k_sm_mbx_process_version_1(hw, mbx);

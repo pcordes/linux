@@ -122,7 +122,9 @@ static void port_subs_info_init(struct snd_seq_port_subs_info *grp)
 }
 
 
-/* create a port, port number is returned (-1 on failure) */
+/* create a port, port number is returned (-1 on failure);
+ * the caller needs to unref the port via snd_seq_port_unlock() appropriately
+ */
 struct snd_seq_client_port *snd_seq_create_port(struct snd_seq_client *client,
 						int port)
 {
@@ -151,6 +153,7 @@ struct snd_seq_client_port *snd_seq_create_port(struct snd_seq_client *client,
 	snd_use_lock_init(&new_port->use_lock);
 	port_subs_info_init(&new_port->c_src);
 	port_subs_info_init(&new_port->c_dest);
+	snd_use_lock_use(&new_port->use_lock);
 
 	num = port >= 0 ? port : 0;
 	mutex_lock(&client->ports_mutex);
@@ -165,9 +168,9 @@ struct snd_seq_client_port *snd_seq_create_port(struct snd_seq_client *client,
 	list_add_tail(&new_port->list, &p->list);
 	client->num_ports++;
 	new_port->addr.port = num;	/* store the port number in the port */
+	sprintf(new_port->name, "port-%d", num);
 	write_unlock_irqrestore(&client->ports_lock, flags);
 	mutex_unlock(&client->ports_mutex);
-	sprintf(new_port->name, "port-%d", num);
 
 	return new_port;
 }
@@ -535,19 +538,22 @@ static void delete_and_unsubscribe_port(struct snd_seq_client *client,
 					bool is_src, bool ack)
 {
 	struct snd_seq_port_subs_info *grp;
+	struct list_head *list;
+	bool empty;
 
 	grp = is_src ? &port->c_src : &port->c_dest;
+	list = is_src ? &subs->src_list : &subs->dest_list;
 	down_write(&grp->list_mutex);
 	write_lock_irq(&grp->list_lock);
-	if (is_src)
-		list_del(&subs->src_list);
-	else
-		list_del(&subs->dest_list);
+	empty = list_empty(list);
+	if (!empty)
+		list_del_init(list);
 	grp->exclusive = 0;
 	write_unlock_irq(&grp->list_lock);
 	up_write(&grp->list_mutex);
 
-	unsubscribe_port(client, port, grp, &subs->info, ack);
+	if (!empty)
+		unsubscribe_port(client, port, grp, &subs->info, ack);
 }
 
 /* connect two ports */
@@ -682,7 +688,6 @@ int snd_seq_event_port_attach(int client,
 
 	return ret;
 }
-
 EXPORT_SYMBOL(snd_seq_event_port_attach);
 
 /*
@@ -703,5 +708,4 @@ int snd_seq_event_port_detach(int client, int port)
 
 	return err;
 }
-
 EXPORT_SYMBOL(snd_seq_event_port_detach);

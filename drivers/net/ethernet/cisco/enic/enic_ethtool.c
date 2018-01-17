@@ -103,25 +103,29 @@ static void enic_intr_coal_set_rx(struct enic *enic, u32 timer)
 	}
 }
 
-static int enic_get_settings(struct net_device *netdev,
-	struct ethtool_cmd *ecmd)
+static int enic_get_ksettings(struct net_device *netdev,
+			      struct ethtool_link_ksettings *ecmd)
 {
 	struct enic *enic = netdev_priv(netdev);
+	struct ethtool_link_settings *base = &ecmd->base;
 
-	ecmd->supported = (SUPPORTED_10000baseT_Full | SUPPORTED_FIBRE);
-	ecmd->advertising = (ADVERTISED_10000baseT_Full | ADVERTISED_FIBRE);
-	ecmd->port = PORT_FIBRE;
-	ecmd->transceiver = XCVR_EXTERNAL;
+	ethtool_link_ksettings_add_link_mode(ecmd, supported,
+					     10000baseT_Full);
+	ethtool_link_ksettings_add_link_mode(ecmd, supported, FIBRE);
+	ethtool_link_ksettings_add_link_mode(ecmd, advertising,
+					     10000baseT_Full);
+	ethtool_link_ksettings_add_link_mode(ecmd, advertising, FIBRE);
+	base->port = PORT_FIBRE;
 
 	if (netif_carrier_ok(netdev)) {
-		ethtool_cmd_speed_set(ecmd, vnic_dev_port_speed(enic->vdev));
-		ecmd->duplex = DUPLEX_FULL;
+		base->speed = vnic_dev_port_speed(enic->vdev);
+		base->duplex = DUPLEX_FULL;
 	} else {
-		ethtool_cmd_speed_set(ecmd, SPEED_UNKNOWN);
-		ecmd->duplex = DUPLEX_UNKNOWN;
+		base->speed = SPEED_UNKNOWN;
+		base->duplex = DUPLEX_UNKNOWN;
 	}
 
-	ecmd->autoneg = AUTONEG_DISABLE;
+	base->autoneg = AUTONEG_DISABLE;
 
 	return 0;
 }
@@ -170,6 +174,81 @@ static void enic_get_strings(struct net_device *netdev, u32 stringset,
 		}
 		break;
 	}
+}
+
+static void enic_get_ringparam(struct net_device *netdev,
+			       struct ethtool_ringparam *ring)
+{
+	struct enic *enic = netdev_priv(netdev);
+	struct vnic_enet_config *c = &enic->config;
+
+	ring->rx_max_pending = ENIC_MAX_RQ_DESCS;
+	ring->rx_pending = c->rq_desc_count;
+	ring->tx_max_pending = ENIC_MAX_WQ_DESCS;
+	ring->tx_pending = c->wq_desc_count;
+}
+
+static int enic_set_ringparam(struct net_device *netdev,
+			      struct ethtool_ringparam *ring)
+{
+	struct enic *enic = netdev_priv(netdev);
+	struct vnic_enet_config *c = &enic->config;
+	int running = netif_running(netdev);
+	unsigned int rx_pending;
+	unsigned int tx_pending;
+	int err = 0;
+
+	if (ring->rx_mini_max_pending || ring->rx_mini_pending) {
+		netdev_info(netdev,
+			    "modifying mini ring params is not supported");
+		return -EINVAL;
+	}
+	if (ring->rx_jumbo_max_pending || ring->rx_jumbo_pending) {
+		netdev_info(netdev,
+			    "modifying jumbo ring params is not supported");
+		return -EINVAL;
+	}
+	rx_pending = c->rq_desc_count;
+	tx_pending = c->wq_desc_count;
+	if (ring->rx_pending > ENIC_MAX_RQ_DESCS ||
+	    ring->rx_pending < ENIC_MIN_RQ_DESCS) {
+		netdev_info(netdev, "rx pending (%u) not in range [%u,%u]",
+			    ring->rx_pending, ENIC_MIN_RQ_DESCS,
+			    ENIC_MAX_RQ_DESCS);
+		return -EINVAL;
+	}
+	if (ring->tx_pending > ENIC_MAX_WQ_DESCS ||
+	    ring->tx_pending < ENIC_MIN_WQ_DESCS) {
+		netdev_info(netdev, "tx pending (%u) not in range [%u,%u]",
+			    ring->tx_pending, ENIC_MIN_WQ_DESCS,
+			    ENIC_MAX_WQ_DESCS);
+		return -EINVAL;
+	}
+	if (running)
+		dev_close(netdev);
+	c->rq_desc_count =
+		ring->rx_pending & 0xffffffe0; /* must be aligned to groups of 32 */
+	c->wq_desc_count =
+		ring->tx_pending & 0xffffffe0; /* must be aligned to groups of 32 */
+	enic_free_vnic_resources(enic);
+	err = enic_alloc_vnic_resources(enic);
+	if (err) {
+		netdev_err(netdev,
+			   "Failed to alloc vNIC resources, aborting\n");
+		enic_free_vnic_resources(enic);
+		goto err_out;
+	}
+	enic_init_vnic_resources(enic);
+	if (running) {
+		err = dev_open(netdev);
+		if (err)
+			goto err_out;
+	}
+	return 0;
+err_out:
+	c->rq_desc_count = rx_pending;
+	c->wq_desc_count = tx_pending;
+	return err;
 }
 
 static int enic_get_sset_count(struct net_device *netdev, int sset)
@@ -500,12 +579,13 @@ static int enic_set_rxfh(struct net_device *netdev, const u32 *indir,
 }
 
 static const struct ethtool_ops enic_ethtool_ops = {
-	.get_settings = enic_get_settings,
 	.get_drvinfo = enic_get_drvinfo,
 	.get_msglevel = enic_get_msglevel,
 	.set_msglevel = enic_set_msglevel,
 	.get_link = ethtool_op_get_link,
 	.get_strings = enic_get_strings,
+	.get_ringparam = enic_get_ringparam,
+	.set_ringparam = enic_set_ringparam,
 	.get_sset_count = enic_get_sset_count,
 	.get_ethtool_stats = enic_get_ethtool_stats,
 	.get_coalesce = enic_get_coalesce,
@@ -516,6 +596,7 @@ static const struct ethtool_ops enic_ethtool_ops = {
 	.get_rxfh_key_size = enic_get_rxfh_key_size,
 	.get_rxfh = enic_get_rxfh,
 	.set_rxfh = enic_set_rxfh,
+	.get_link_ksettings = enic_get_ksettings,
 };
 
 void enic_set_ethtool_ops(struct net_device *netdev)

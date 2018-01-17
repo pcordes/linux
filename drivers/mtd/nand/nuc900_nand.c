@@ -19,7 +19,7 @@
 #include <linux/err.h>
 
 #include <linux/mtd/mtd.h>
-#include <linux/mtd/nand.h>
+#include <linux/mtd/rawnand.h>
 #include <linux/mtd/partitions.h>
 
 #define REG_FMICSR   	0x00
@@ -113,7 +113,7 @@ static int nuc900_check_rb(struct nuc900_nand *nand)
 {
 	unsigned int val;
 	spin_lock(&nand->lock);
-	val = __raw_readl(REG_SMISR);
+	val = __raw_readl(nand->reg + REG_SMISR);
 	val &= READYBUSY;
 	spin_unlock(&nand->lock);
 
@@ -154,7 +154,7 @@ static void nuc900_nand_command_lp(struct mtd_info *mtd, unsigned int command,
 		if (page_addr != -1) {
 			write_addr_reg(nand, page_addr);
 
-			if (chip->chipsize > (128 << 20)) {
+			if (chip->options & NAND_ROW_ADDR_3) {
 				write_addr_reg(nand, page_addr >> 8);
 				write_addr_reg(nand, page_addr >> 16 | ENDADDR);
 			} else {
@@ -261,6 +261,7 @@ static int nuc900_nand_probe(struct platform_device *pdev)
 	chip->chip_delay	= 50;
 	chip->options		= 0;
 	chip->ecc.mode		= NAND_ECC_SOFT;
+	chip->ecc.algo		= NAND_ECC_HAMMING;
 
 	res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
 	nuc900_nand->reg = devm_ioremap_resource(&pdev->dev, res);

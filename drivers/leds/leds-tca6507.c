@@ -327,6 +327,8 @@ static void set_times(struct tca6507_chip *tca, int bank)
 	int result;
 
 	result = choose_times(tca->bank[bank].ontime, &c1, &c2);
+	if (result < 0)
+		return;
 	dev_dbg(&tca->client->dev,
 		"Chose on  times %d(%d) %d(%d) for %dms\n",
 		c1, time_codes[c1],
@@ -713,7 +715,7 @@ tca6507_led_dt_init(struct i2c_client *client)
 		if (of_property_match_string(child, "compatible", "gpio") >= 0)
 			led.flags |= TCA6507_MAKE_GPIO;
 		ret = of_property_read_u32(child, "reg", &reg);
-		if (ret != 0 || reg < 0 || reg >= NUM_LEDS)
+		if (ret != 0 || reg >= NUM_LEDS)
 			continue;
 
 		tca_leds[reg] = led;

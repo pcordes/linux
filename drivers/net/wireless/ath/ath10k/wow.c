@@ -233,7 +233,7 @@ int ath10k_wow_op_suspend(struct ieee80211_hw *hw,
 	mutex_lock(&ar->conf_mutex);
 
 	if (WARN_ON(!test_bit(ATH10K_FW_FEATURE_WOWLAN_SUPPORT,
-			      ar->fw_features))) {
+			      ar->running_fw->fw_file.fw_features))) {
 		ret = 1;
 		goto exit;
 	}
@@ -277,6 +277,18 @@ exit:
 	return ret ? 1 : 0;
 }
 
+void ath10k_wow_op_set_wakeup(struct ieee80211_hw *hw, bool enabled)
+{
+	struct ath10k *ar = hw->priv;
+
+	mutex_lock(&ar->conf_mutex);
+	if (test_bit(ATH10K_FW_FEATURE_WOWLAN_SUPPORT,
+		     ar->running_fw->fw_file.fw_features)) {
+		device_set_wakeup_enable(ar->dev, enabled);
+	}
+	mutex_unlock(&ar->conf_mutex);
+}
+
 int ath10k_wow_op_resume(struct ieee80211_hw *hw)
 {
 	struct ath10k *ar = hw->priv;
@@ -285,7 +297,7 @@ int ath10k_wow_op_resume(struct ieee80211_hw *hw)
 	mutex_lock(&ar->conf_mutex);
 
 	if (WARN_ON(!test_bit(ATH10K_FW_FEATURE_WOWLAN_SUPPORT,
-			      ar->fw_features))) {
+			      ar->running_fw->fw_file.fw_features))) {
 		ret = 1;
 		goto exit;
 	}
@@ -325,7 +337,8 @@ exit:
 
 int ath10k_wow_init(struct ath10k *ar)
 {
-	if (!test_bit(ATH10K_FW_FEATURE_WOWLAN_SUPPORT, ar->fw_features))
+	if (!test_bit(ATH10K_FW_FEATURE_WOWLAN_SUPPORT,
+		      ar->running_fw->fw_file.fw_features))
 		return 0;
 
 	if (WARN_ON(!test_bit(WMI_SERVICE_WOW, ar->wmi.svc_map)))
@@ -334,6 +347,8 @@ int ath10k_wow_init(struct ath10k *ar)
 	ar->wow.wowlan_support = ath10k_wowlan_support;
 	ar->wow.wowlan_support.n_patterns = ar->wow.max_num_patterns;
 	ar->hw->wiphy->wowlan = &ar->wow.wowlan_support;
+
+	device_set_wakeup_capable(ar->dev, true);
 
 	return 0;
 }

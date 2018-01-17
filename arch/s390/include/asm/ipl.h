@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0 */
 /*
  * s390 (re)ipl support
  *
@@ -11,6 +12,8 @@
 #include <asm/types.h>
 #include <asm/cio.h>
 #include <asm/setup.h>
+
+#define NSS_NAME_SIZE	8
 
 #define IPL_PARMBLOCK_ORIGIN	0x2000
 
@@ -81,7 +84,7 @@ struct ipl_parameter_block {
 		struct ipl_block_fcp fcp;
 		struct ipl_block_ccw ccw;
 	} ipl_info;
-} __attribute__((packed,aligned(4096)));
+} __packed __aligned(PAGE_SIZE);
 
 /*
  * IPL validity flags
@@ -97,7 +100,7 @@ void __init save_area_add_vxrs(struct save_area *, __vector128 *vxrs);
 extern void do_reipl(void);
 extern void do_halt(void);
 extern void do_poff(void);
-extern void ipl_save_parameters(void);
+extern void ipl_verify_parameters(void);
 extern void ipl_update_parameters(void);
 extern size_t append_ipl_vmparm(char *, size_t);
 extern size_t append_ipl_scpdata(char *, size_t);
@@ -105,7 +108,6 @@ extern size_t append_ipl_scpdata(char *, size_t);
 enum {
 	IPL_DEVNO_VALID		= 1,
 	IPL_PARMBLOCK_VALID	= 2,
-	IPL_NSS_VALID		= 4,
 };
 
 enum ipl_type {
@@ -141,11 +143,11 @@ extern void setup_ipl(void);
  * DIAG 308 support
  */
 enum diag308_subcode  {
-	DIAG308_REL_HSA	= 2,
-	DIAG308_IPL	= 3,
-	DIAG308_DUMP	= 4,
-	DIAG308_SET	= 5,
-	DIAG308_STORE	= 6,
+	DIAG308_REL_HSA = 2,
+	DIAG308_LOAD_CLEAR = 3,
+	DIAG308_LOAD_NORMAL_DUMP = 4,
+	DIAG308_SET = 5,
+	DIAG308_STORE = 6,
 };
 
 enum diag308_ipl_type {

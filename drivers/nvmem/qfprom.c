@@ -13,21 +13,39 @@
 
 #include <linux/device.h>
 #include <linux/module.h>
+#include <linux/io.h>
 #include <linux/nvmem-provider.h>
 #include <linux/platform_device.h>
-#include <linux/regmap.h>
 
-static struct regmap_config qfprom_regmap_config = {
-	.reg_bits = 32,
-	.val_bits = 8,
-	.reg_stride = 1,
-	.val_format_endian = REGMAP_ENDIAN_LITTLE,
+struct qfprom_priv {
+	void __iomem *base;
 };
 
-static struct nvmem_config econfig = {
-	.name = "qfprom",
-	.owner = THIS_MODULE,
-};
+static int qfprom_reg_read(void *context,
+			unsigned int reg, void *_val, size_t bytes)
+{
+	struct qfprom_priv *priv = context;
+	u8 *val = _val;
+	int i = 0, words = bytes;
+
+	while (words--)
+		*val++ = readb(priv->base + reg + i++);
+
+	return 0;
+}
+
+static int qfprom_reg_write(void *context,
+			 unsigned int reg, void *_val, size_t bytes)
+{
+	struct qfprom_priv *priv = context;
+	u8 *val = _val;
+	int i = 0, words = bytes;
+
+	while (words--)
+		writeb(*val++, priv->base + reg + i++);
+
+	return 0;
+}
 
 static int qfprom_remove(struct platform_device *pdev)
 {
@@ -36,27 +54,34 @@ static int qfprom_remove(struct platform_device *pdev)
 	return nvmem_unregister(nvmem);
 }
 
+static struct nvmem_config econfig = {
+	.name = "qfprom",
+	.stride = 1,
+	.word_size = 1,
+	.reg_read = qfprom_reg_read,
+	.reg_write = qfprom_reg_write,
+};
+
 static int qfprom_probe(struct platform_device *pdev)
 {
 	struct device *dev = &pdev->dev;
 	struct resource *res;
 	struct nvmem_device *nvmem;
-	struct regmap *regmap;
-	void __iomem *base;
+	struct qfprom_priv *priv;
+
+	priv = devm_kzalloc(dev, sizeof(*priv), GFP_KERNEL);
+	if (!priv)
+		return -ENOMEM;
 
 	res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
-	base = devm_ioremap_resource(dev, res);
-	if (IS_ERR(base))
-		return PTR_ERR(base);
+	priv->base = devm_ioremap_resource(dev, res);
+	if (IS_ERR(priv->base))
+		return PTR_ERR(priv->base);
 
-	qfprom_regmap_config.max_register = resource_size(res) - 1;
-
-	regmap = devm_regmap_init_mmio(dev, base, &qfprom_regmap_config);
-	if (IS_ERR(regmap)) {
-		dev_err(dev, "regmap init failed\n");
-		return PTR_ERR(regmap);
-	}
+	econfig.size = resource_size(res);
 	econfig.dev = dev;
+	econfig.priv = priv;
+
 	nvmem = nvmem_register(&econfig);
 	if (IS_ERR(nvmem))
 		return PTR_ERR(nvmem);

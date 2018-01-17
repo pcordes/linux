@@ -21,10 +21,14 @@
 #include <linux/sched.h>
 #include <linux/gfp.h>
 #include <linux/bootmem.h>
+#include <linux/nmi.h>
+
 #include <asm/fixmap.h>
 #include <asm/pvclock.h>
+#include <asm/vgtod.h>
 
 static u8 valid_flags __read_mostly = 0;
+static struct pvclock_vsyscall_time_info *pvti_cpu0_va __read_mostly;
 
 void pvclock_set_flags(u8 flags)
 {
@@ -61,26 +65,28 @@ void pvclock_resume(void)
 u8 pvclock_read_flags(struct pvclock_vcpu_time_info *src)
 {
 	unsigned version;
-	cycle_t ret;
 	u8 flags;
 
 	do {
-		version = __pvclock_read_cycles(src, &ret, &flags);
-	} while ((src->version & 1) || version != src->version);
+		version = pvclock_read_begin(src);
+		flags = src->flags;
+	} while (pvclock_read_retry(src, version));
 
 	return flags & valid_flags;
 }
 
-cycle_t pvclock_clocksource_read(struct pvclock_vcpu_time_info *src)
+u64 pvclock_clocksource_read(struct pvclock_vcpu_time_info *src)
 {
 	unsigned version;
-	cycle_t ret;
+	u64 ret;
 	u64 last;
 	u8 flags;
 
 	do {
-		version = __pvclock_read_cycles(src, &ret, &flags);
-	} while ((src->version & 1) || version != src->version);
+		version = pvclock_read_begin(src);
+		ret = __pvclock_read_cycles(src, rdtsc_ordered());
+		flags = src->flags;
+	} while (pvclock_read_retry(src, version));
 
 	if (unlikely((flags & PVCLOCK_GUEST_STOPPED) != 0)) {
 		src->flags &= ~PVCLOCK_GUEST_STOPPED;
@@ -140,3 +146,15 @@ void pvclock_read_wallclock(struct pvclock_wall_clock *wall_clock,
 
 	set_normalized_timespec(ts, now.tv_sec, now.tv_nsec);
 }
+
+void pvclock_set_pvti_cpu0_va(struct pvclock_vsyscall_time_info *pvti)
+{
+	WARN_ON(vclock_was_used(VCLOCK_PVCLOCK));
+	pvti_cpu0_va = pvti;
+}
+
+struct pvclock_vsyscall_time_info *pvclock_get_pvti_cpu0_va(void)
+{
+	return pvti_cpu0_va;
+}
+EXPORT_SYMBOL_GPL(pvclock_get_pvti_cpu0_va);

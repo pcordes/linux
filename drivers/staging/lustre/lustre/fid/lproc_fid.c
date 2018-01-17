@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0
 /*
  * GPL HEADER START
  *
@@ -15,11 +16,7 @@
  *
  * You should have received a copy of the GNU General Public License
  * version 2 along with this program; If not, see
- * http://www.sun.com/software/products/lustre/docs/GPLv2.pdf
- *
- * Please contact Sun Microsystems, Inc., 4150 Network Circle, Santa Clara,
- * CA 95054 USA or visit www.sun.com if you need additional information or
- * have any questions.
+ * http://www.gnu.org/licenses/gpl-2.0.html
  *
  * GPL HEADER END
  */
@@ -42,14 +39,14 @@
 
 #define DEBUG_SUBSYSTEM S_FID
 
-#include "../../include/linux/libcfs/libcfs.h"
+#include <linux/libcfs/libcfs.h>
 #include <linux/module.h>
 
-#include "../include/obd.h"
-#include "../include/obd_class.h"
-#include "../include/obd_support.h"
-#include "../include/lustre_req_layout.h"
-#include "../include/lustre_fid.h"
+#include <obd.h>
+#include <obd_class.h>
+#include <obd_support.h>
+#include <lustre_req_layout.h>
+#include <lustre_fid.h>
 #include "fid_internal.h"
 
 /* Format: [0x64BIT_INT - 0x64BIT_INT] + 32 bytes just in case */
@@ -66,7 +63,7 @@ ldebugfs_fid_write_common(const char __user *buffer, size_t count,
 	int rc;
 	char kernbuf[MAX_FID_RANGE_STRLEN];
 
-	LASSERT(range != NULL);
+	LASSERT(range);
 
 	if (count >= sizeof(kernbuf))
 		return -EINVAL;
@@ -85,7 +82,9 @@ ldebugfs_fid_write_common(const char __user *buffer, size_t count,
 	rc = sscanf(kernbuf, "[%llx - %llx]\n",
 		    (unsigned long long *)&tmp.lsr_start,
 		    (unsigned long long *)&tmp.lsr_end);
-	if (!range_is_sane(&tmp) || range_is_zero(&tmp) ||
+	if (rc != 2)
+		return -EINVAL;
+	if (!lu_seq_range_is_sane(&tmp) || lu_seq_range_is_zero(&tmp) ||
 	    tmp.lsr_start < range->lsr_start || tmp.lsr_end > range->lsr_end)
 		return -EINVAL;
 	*range = tmp;
@@ -102,13 +101,12 @@ ldebugfs_fid_space_seq_write(struct file *file,
 	int rc;
 
 	seq = ((struct seq_file *)file->private_data)->private;
-	LASSERT(seq != NULL);
 
 	mutex_lock(&seq->lcs_mutex);
 	rc = ldebugfs_fid_write_common(buffer, count, &seq->lcs_space);
 
 	if (rc == 0) {
-		CDEBUG(D_INFO, "%s: Space: "DRANGE"\n",
+		CDEBUG(D_INFO, "%s: Space: " DRANGE "\n",
 		       seq->lcs_name, PRANGE(&seq->lcs_space));
 	}
 
@@ -121,8 +119,6 @@ static int
 ldebugfs_fid_space_seq_show(struct seq_file *m, void *unused)
 {
 	struct lu_client_seq *seq = (struct lu_client_seq *)m->private;
-
-	LASSERT(seq != NULL);
 
 	mutex_lock(&seq->lcs_mutex);
 	seq_printf(m, "[%#llx - %#llx]:%x:%s\n", PRANGE(&seq->lcs_space));
@@ -141,7 +137,6 @@ ldebugfs_fid_width_seq_write(struct file *file,
 	int rc, val;
 
 	seq = ((struct seq_file *)file->private_data)->private;
-	LASSERT(seq != NULL);
 
 	rc = lprocfs_write_helper(buffer, count, &val);
 	if (rc)
@@ -170,8 +165,6 @@ ldebugfs_fid_width_seq_show(struct seq_file *m, void *unused)
 {
 	struct lu_client_seq *seq = (struct lu_client_seq *)m->private;
 
-	LASSERT(seq != NULL);
-
 	mutex_lock(&seq->lcs_mutex);
 	seq_printf(m, "%llu\n", seq->lcs_width);
 	mutex_unlock(&seq->lcs_mutex);
@@ -183,8 +176,6 @@ static int
 ldebugfs_fid_fid_seq_show(struct seq_file *m, void *unused)
 {
 	struct lu_client_seq *seq = (struct lu_client_seq *)m->private;
-
-	LASSERT(seq != NULL);
 
 	mutex_lock(&seq->lcs_mutex);
 	seq_printf(m, DFID "\n", PFID(&seq->lcs_fid));
@@ -199,9 +190,7 @@ ldebugfs_fid_server_seq_show(struct seq_file *m, void *unused)
 	struct lu_client_seq *seq = (struct lu_client_seq *)m->private;
 	struct client_obd *cli;
 
-	LASSERT(seq != NULL);
-
-	if (seq->lcs_exp != NULL) {
+	if (seq->lcs_exp) {
 		cli = &seq->lcs_exp->exp_obd->u.cli;
 		seq_printf(m, "%s\n", cli->cl_target_uuid.uuid);
 	}
@@ -215,9 +204,13 @@ LPROC_SEQ_FOPS_RO(ldebugfs_fid_server);
 LPROC_SEQ_FOPS_RO(ldebugfs_fid_fid);
 
 struct lprocfs_vars seq_client_debugfs_list[] = {
-	{ "space", &ldebugfs_fid_space_fops },
-	{ "width", &ldebugfs_fid_width_fops },
-	{ "server", &ldebugfs_fid_server_fops },
-	{ "fid", &ldebugfs_fid_fid_fops },
+	{ .name =	"space",
+	  .fops =	&ldebugfs_fid_space_fops },
+	{ .name	=	"width",
+	  .fops =	&ldebugfs_fid_width_fops },
+	{ .name =	"server",
+	  .fops =	&ldebugfs_fid_server_fops },
+	{ .name	=	"fid",
+	  .fops =	&ldebugfs_fid_fid_fops },
 	{ NULL }
 };

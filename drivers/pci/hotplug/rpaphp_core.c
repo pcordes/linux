@@ -318,7 +318,7 @@ int rpaphp_add_slot(struct device_node *dn)
 	if (!is_php_dn(dn, &indexes, &names, &types, &power_domains))
 		return 0;
 
-	dbg("Entry %s: dn->full_name=%s\n", __func__, dn->full_name);
+	dbg("Entry %s: dn=%pOF\n", __func__, dn);
 
 	/* register PCI devices */
 	name = (char *) &names[1];
@@ -404,7 +404,7 @@ static int enable_slot(struct hotplug_slot *hotplug_slot)
 
 	if (state == PRESENT) {
 		pci_lock_rescan_remove();
-		pcibios_add_pci_devices(slot->bus);
+		pci_hp_add_devices(slot->bus);
 		pci_unlock_rescan_remove();
 		slot->state = CONFIGURED;
 	} else if (state == EMPTY) {
@@ -426,7 +426,7 @@ static int disable_slot(struct hotplug_slot *hotplug_slot)
 		return -EINVAL;
 
 	pci_lock_rescan_remove();
-	pcibios_remove_pci_devices(slot->bus);
+	pci_hp_remove_devices(slot->bus);
 	pci_unlock_rescan_remove();
 	vm_unmap_aliases();
 

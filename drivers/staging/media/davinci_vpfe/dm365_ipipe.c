@@ -1350,21 +1350,16 @@ error:
  */
 static long ipipe_ioctl(struct v4l2_subdev *sd, unsigned int cmd, void *arg)
 {
-	int ret = 0;
-
 	switch (cmd) {
 	case VIDIOC_VPFE_IPIPE_S_CONFIG:
-		ret = ipipe_s_config(sd, arg);
-		break;
+		return ipipe_s_config(sd, arg);
 
 	case VIDIOC_VPFE_IPIPE_G_CONFIG:
-		ret = ipipe_g_config(sd, arg);
-		break;
+		return ipipe_g_config(sd, arg);
 
 	default:
-		ret = -ENOIOCTLCMD;
+		return -ENOIOCTLCMD;
 	}
-	return ret;
 }
 
 void vpfe_ipipe_enable(struct vpfe_device *vpfe_dev, int en)
@@ -1808,14 +1803,14 @@ vpfe_ipipe_init(struct vpfe_ipipe_device *ipipe, struct platform_device *pdev)
 		return -EBUSY;
 	ipipe->base_addr = ioremap_nocache(res->start, res_len);
 	if (!ipipe->base_addr)
-		return -EBUSY;
+		goto error_release;
 
 	res = platform_get_resource(pdev, IORESOURCE_MEM, 6);
 	if (!res)
-		return -ENOENT;
+		goto error_unmap;
 	ipipe->isp5_base_addr = ioremap_nocache(res->start, res_len);
 	if (!ipipe->isp5_base_addr)
-		return -EBUSY;
+		goto error_unmap;
 
 	v4l2_subdev_init(sd, &ipipe_v4l2_ops);
 	sd->internal_ops = &ipipe_v4l2_internal_ops;
@@ -1844,6 +1839,12 @@ vpfe_ipipe_init(struct vpfe_ipipe_device *ipipe, struct platform_device *pdev)
 	sd->ctrl_handler = &ipipe->ctrls;
 
 	return media_entity_pads_init(me, IPIPE_PADS_NUM, pads);
+
+error_unmap:
+	iounmap(ipipe->base_addr);
+error_release:
+	release_mem_region(res->start, res_len);
+	return -ENOMEM;
 }
 
 /*

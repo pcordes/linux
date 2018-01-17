@@ -612,7 +612,7 @@ static int adi_get_group_pins(struct pinctrl_dev *pctldev, unsigned selector,
 	return 0;
 }
 
-static struct pinctrl_ops adi_pctrl_ops = {
+static const struct pinctrl_ops adi_pctrl_ops = {
 	.get_groups_count = adi_get_groups_count,
 	.get_group_name = adi_get_group_name,
 	.get_group_pins = adi_get_group_pins,
@@ -696,7 +696,7 @@ static int adi_pinmux_request_gpio(struct pinctrl_dev *pctldev,
 	return 0;
 }
 
-static struct pinmux_ops adi_pinmux_ops = {
+static const struct pinmux_ops adi_pinmux_ops = {
 	.set_mux = adi_pinmux_set,
 	.get_functions_count = adi_pinmux_get_funcs_count,
 	.get_function_name = adi_pinmux_get_func_name,
@@ -1058,7 +1058,8 @@ static int adi_pinctrl_probe(struct platform_device *pdev)
 	adi_pinmux_desc.npins = pinctrl->soc->npins;
 
 	/* Now register the pin controller and all pins it handles */
-	pinctrl->pctl = pinctrl_register(&adi_pinmux_desc, &pdev->dev, pinctrl);
+	pinctrl->pctl = devm_pinctrl_register(&pdev->dev, &adi_pinmux_desc,
+					      pinctrl);
 	if (IS_ERR(pinctrl->pctl)) {
 		dev_err(&pdev->dev, "could not register pinctrl ADI2 driver\n");
 		return PTR_ERR(pinctrl->pctl);
@@ -1069,18 +1070,8 @@ static int adi_pinctrl_probe(struct platform_device *pdev)
 	return 0;
 }
 
-static int adi_pinctrl_remove(struct platform_device *pdev)
-{
-	struct adi_pinctrl *pinctrl = platform_get_drvdata(pdev);
-
-	pinctrl_unregister(pinctrl->pctl);
-
-	return 0;
-}
-
 static struct platform_driver adi_pinctrl_driver = {
 	.probe		= adi_pinctrl_probe,
-	.remove		= adi_pinctrl_remove,
 	.driver		= {
 		.name	= DRIVER_NAME,
 	},

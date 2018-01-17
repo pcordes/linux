@@ -5,7 +5,7 @@
  *****************************************************************************/
 
 /*
- * Copyright (C) 2000 - 2016, Intel Corp.
+ * Copyright (C) 2000 - 2017, Intel Corp.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -98,8 +98,8 @@ acpi_status
 acpi_hw_low_set_gpe(struct acpi_gpe_event_info *gpe_event_info, u32 action)
 {
 	struct acpi_gpe_register_info *gpe_register_info;
-	acpi_status status;
-	u32 enable_mask;
+	acpi_status status = AE_OK;
+	u64 enable_mask;
 	u32 register_bit;
 
 	ACPI_FUNCTION_ENTRY();
@@ -148,9 +148,14 @@ acpi_hw_low_set_gpe(struct acpi_gpe_event_info *gpe_event_info, u32 action)
 		return (AE_BAD_PARAMETER);
 	}
 
-	/* Write the updated enable mask */
+	if (!(register_bit & gpe_register_info->mask_for_run)) {
 
-	status = acpi_hw_write(enable_mask, &gpe_register_info->enable_address);
+		/* Write the updated enable mask */
+
+		status =
+		    acpi_hw_write(enable_mask,
+				  &gpe_register_info->enable_address);
+	}
 	return (status);
 }
 
@@ -166,7 +171,7 @@ acpi_hw_low_set_gpe(struct acpi_gpe_event_info *gpe_event_info, u32 action)
  *
  ******************************************************************************/
 
-acpi_status acpi_hw_clear_gpe(struct acpi_gpe_event_info * gpe_event_info)
+acpi_status acpi_hw_clear_gpe(struct acpi_gpe_event_info *gpe_event_info)
 {
 	struct acpi_gpe_register_info *gpe_register_info;
 	acpi_status status;
@@ -206,10 +211,10 @@ acpi_status acpi_hw_clear_gpe(struct acpi_gpe_event_info * gpe_event_info)
  ******************************************************************************/
 
 acpi_status
-acpi_hw_get_gpe_status(struct acpi_gpe_event_info * gpe_event_info,
+acpi_hw_get_gpe_status(struct acpi_gpe_event_info *gpe_event_info,
 		       acpi_event_status *event_status)
 {
-	u32 in_byte;
+	u64 in_byte;
 	u32 register_bit;
 	struct acpi_gpe_register_info *gpe_register_info;
 	acpi_event_status local_event_status = 0;
@@ -240,6 +245,12 @@ acpi_hw_get_gpe_status(struct acpi_gpe_event_info * gpe_event_info,
 
 	if (register_bit & gpe_register_info->enable_for_run) {
 		local_event_status |= ACPI_EVENT_FLAG_ENABLED;
+	}
+
+	/* GPE currently masked? (masked for runtime?) */
+
+	if (register_bit & gpe_register_info->mask_for_run) {
+		local_event_status |= ACPI_EVENT_FLAG_MASKED;
 	}
 
 	/* GPE enabled for wake? */
@@ -391,12 +402,13 @@ acpi_hw_clear_gpe_block(struct acpi_gpe_xrupt_info *gpe_xrupt_info,
 
 acpi_status
 acpi_hw_enable_runtime_gpe_block(struct acpi_gpe_xrupt_info *gpe_xrupt_info,
-				 struct acpi_gpe_block_info * gpe_block,
+				 struct acpi_gpe_block_info *gpe_block,
 				 void *context)
 {
 	u32 i;
 	acpi_status status;
 	struct acpi_gpe_register_info *gpe_register_info;
+	u8 enable_mask;
 
 	/* NOTE: assumes that all GPEs are currently disabled */
 
@@ -410,9 +422,10 @@ acpi_hw_enable_runtime_gpe_block(struct acpi_gpe_xrupt_info *gpe_xrupt_info,
 
 		/* Enable all "runtime" GPEs in this register */
 
+		enable_mask = gpe_register_info->enable_for_run &
+		    ~gpe_register_info->mask_for_run;
 		status =
-		    acpi_hw_gpe_enable_write(gpe_register_info->enable_for_run,
-					     gpe_register_info);
+		    acpi_hw_gpe_enable_write(enable_mask, gpe_register_info);
 		if (ACPI_FAILURE(status)) {
 			return (status);
 		}

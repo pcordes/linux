@@ -613,7 +613,7 @@ int hci_conn_del(struct hci_conn *conn)
 	return 0;
 }
 
-struct hci_dev *hci_get_route(bdaddr_t *dst, bdaddr_t *src)
+struct hci_dev *hci_get_route(bdaddr_t *dst, bdaddr_t *src, uint8_t src_type)
 {
 	int use_src = bacmp(src, BDADDR_ANY);
 	struct hci_dev *hdev = NULL, *d;
@@ -625,7 +625,7 @@ struct hci_dev *hci_get_route(bdaddr_t *dst, bdaddr_t *src)
 	list_for_each_entry(d, &hci_dev_list, list) {
 		if (!test_bit(HCI_UP, &d->flags) ||
 		    hci_dev_test_flag(d, HCI_USER_CHANNEL) ||
-		    d->dev_type != HCI_BREDR)
+		    d->dev_type != HCI_PRIMARY)
 			continue;
 
 		/* Simple routing:
@@ -634,7 +634,29 @@ struct hci_dev *hci_get_route(bdaddr_t *dst, bdaddr_t *src)
 		 */
 
 		if (use_src) {
-			if (!bacmp(&d->bdaddr, src)) {
+			bdaddr_t id_addr;
+			u8 id_addr_type;
+
+			if (src_type == BDADDR_BREDR) {
+				if (!lmp_bredr_capable(d))
+					continue;
+				bacpy(&id_addr, &d->bdaddr);
+				id_addr_type = BDADDR_BREDR;
+			} else {
+				if (!lmp_le_capable(d))
+					continue;
+
+				hci_copy_identity_address(d, &id_addr,
+							  &id_addr_type);
+
+				/* Convert from HCI to three-value type */
+				if (id_addr_type == ADDR_LE_DEV_PUBLIC)
+					id_addr_type = BDADDR_LE_PUBLIC;
+				else
+					id_addr_type = BDADDR_LE_RANDOM;
+			}
+
+			if (!bacmp(&id_addr, src) && id_addr_type == src_type) {
 				hdev = d; break;
 			}
 		} else {
@@ -707,8 +729,8 @@ static void create_le_conn_complete(struct hci_dev *hdev, u8 status, u16 opcode)
 		goto done;
 	}
 
-	BT_ERR("HCI request failed to create LE connection: status 0x%2.2x",
-	       status);
+	bt_dev_err(hdev, "request failed to create LE connection: "
+		   "status 0x%2.2x", status);
 
 	if (!conn)
 		goto done;
@@ -719,6 +741,13 @@ done:
 	hci_dev_unlock(hdev);
 }
 
+static bool conn_use_rpa(struct hci_conn *conn)
+{
+	struct hci_dev *hdev = conn->hdev;
+
+	return hci_dev_test_flag(hdev, HCI_PRIVACY);
+}
+
 static void hci_req_add_le_create_conn(struct hci_request *req,
 				       struct hci_conn *conn)
 {
@@ -726,13 +755,14 @@ static void hci_req_add_le_create_conn(struct hci_request *req,
 	struct hci_dev *hdev = conn->hdev;
 	u8 own_addr_type;
 
-	memset(&cp, 0, sizeof(cp));
-
 	/* Update random address, but set require_privacy to false so
 	 * that we never connect with an non-resolvable address.
 	 */
-	if (hci_update_random_address(req, false, &own_addr_type))
+	if (hci_update_random_address(req, false, conn_use_rpa(conn),
+				      &own_addr_type))
 		return;
+
+	memset(&cp, 0, sizeof(cp));
 
 	/* Set window to be the same value as the interval to enable
 	 * continuous scanning.
@@ -774,7 +804,8 @@ static void hci_req_directed_advertising(struct hci_request *req,
 	/* Set require_privacy to false so that the remote device has a
 	 * chance of identifying us.
 	 */
-	if (hci_update_random_address(req, false, &own_addr_type) < 0)
+	if (hci_update_random_address(req, false, conn_use_rpa(conn),
+				      &own_addr_type) < 0)
 		return;
 
 	memset(&cp, 0, sizeof(cp));
@@ -876,7 +907,7 @@ struct hci_conn *hci_connect_le(struct hci_dev *hdev, bdaddr_t *dst,
 		 */
 		if (hci_dev_test_flag(hdev, HCI_LE_SCAN) &&
 		    hdev->le_scan_type == LE_SCAN_ACTIVE) {
-			skb_queue_purge(&req.cmd_q);
+			hci_req_purge(&req);
 			hci_conn_del(conn);
 			return ERR_PTR(-EBUSY);
 		}

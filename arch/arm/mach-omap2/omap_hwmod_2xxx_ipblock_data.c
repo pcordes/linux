@@ -20,11 +20,6 @@
 #include "prm-regbits-24xx.h"
 #include "wd_timer.h"
 
-static struct omap_hwmod_dma_info omap2xxx_dss_sdma_chs[] = {
-	{ .name = "dispc", .dma_req = 5 },
-	{ .dma_req = -1, },
-};
-
 /*
  * 'dispc' class
  * display controller
@@ -55,7 +50,6 @@ static struct omap_hwmod_class_sysconfig omap2xxx_timer_sysc = {
 			   SYSC_HAS_ENAWAKEUP | SYSC_HAS_SOFTRESET |
 			   SYSC_HAS_AUTOIDLE | SYSS_HAS_RESET_STATUS),
 	.idlemodes	= (SIDLE_FORCE | SIDLE_NO | SIDLE_SMART),
-	.clockact       = CLOCKACT_TEST_ICLK,
 	.sysc_fields	= &omap_hwmod_sysc_type1,
 };
 
@@ -551,7 +545,6 @@ struct omap_hwmod omap2xxx_dss_core_hwmod = {
 	.name		= "dss_core",
 	.class		= &omap2_dss_hwmod_class,
 	.main_clk	= "dss1_fck", /* instead of dss_fck */
-	.sdma_reqs	= omap2xxx_dss_sdma_chs,
 	.prcm		= {
 		.omap2 = {
 			.prcm_reg_id = 1,
@@ -569,7 +562,6 @@ struct omap_hwmod omap2xxx_dss_core_hwmod = {
 struct omap_hwmod omap2xxx_dss_dispc_hwmod = {
 	.name		= "dss_dispc",
 	.class		= &omap2_dispc_hwmod_class,
-	.mpu_irqs	= omap2_dispc_irqs,
 	.main_clk	= "dss1_fck",
 	.prcm		= {
 		.omap2 = {

@@ -113,7 +113,7 @@ try_again:
 
 	wake_up_bit(&cookie->flags, 0);
 	if (xpage)
-		page_cache_release(xpage);
+		put_page(xpage);
 	__fscache_uncache_page(cookie, page);
 	return true;
 
@@ -164,7 +164,7 @@ static void fscache_end_page_write(struct fscache_object *object,
 	}
 	spin_unlock(&object->lock);
 	if (xpage)
-		page_cache_release(xpage);
+		put_page(xpage);
 }
 
 /*
@@ -884,8 +884,10 @@ void fscache_invalidate_writes(struct fscache_cookie *cookie)
 		spin_unlock(&cookie->stores_lock);
 
 		for (i = n - 1; i >= 0; i--)
-			page_cache_release(results[i]);
+			put_page(results[i]);
 	}
+
+	wake_up_bit(&cookie->flags, 0);
 
 	_leave("");
 }
@@ -982,7 +984,7 @@ int __fscache_write_page(struct fscache_cookie *cookie,
 
 	radix_tree_tag_set(&cookie->stores, page->index,
 			   FSCACHE_COOKIE_PENDING_TAG);
-	page_cache_get(page);
+	get_page(page);
 
 	/* we only want one writer at a time, but we do need to queue new
 	 * writers after exclusive ops */
@@ -1026,7 +1028,7 @@ submit_failed:
 	radix_tree_delete(&cookie->stores, page->index);
 	spin_unlock(&cookie->stores_lock);
 	wake_cookie = __fscache_unuse_cookie(cookie);
-	page_cache_release(page);
+	put_page(page);
 	ret = -ENOBUFS;
 	goto nobufs;
 
@@ -1173,14 +1175,13 @@ void __fscache_uncache_all_inode_pages(struct fscache_cookie *cookie,
 		return;
 	}
 
-	pagevec_init(&pvec, 0);
+	pagevec_init(&pvec);
 	next = 0;
 	do {
-		if (!pagevec_lookup(&pvec, mapping, next, PAGEVEC_SIZE))
+		if (!pagevec_lookup(&pvec, mapping, &next))
 			break;
 		for (i = 0; i < pagevec_count(&pvec); i++) {
 			struct page *page = pvec.pages[i];
-			next = page->index;
 			if (PageFsCache(page)) {
 				__fscache_wait_on_page_write(cookie, page);
 				__fscache_uncache_page(cookie, page);
@@ -1188,7 +1189,7 @@ void __fscache_uncache_all_inode_pages(struct fscache_cookie *cookie,
 		}
 		pagevec_release(&pvec);
 		cond_resched();
-	} while (++next);
+	} while (next);
 
 	_leave("");
 }

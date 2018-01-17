@@ -109,6 +109,10 @@ extern int audit_classify_compat_syscall(int abi, unsigned syscall);
 /* maximized args number that audit_socketcall can process */
 #define AUDITSC_ARGS		6
 
+/* bit values for ->signal->audit_tty */
+#define AUDIT_TTY_ENABLE	BIT(0)
+#define AUDIT_TTY_LOG_PASSWD	BIT(1)
+
 struct filename;
 
 extern void audit_log_session_info(struct audit_buffer *ab);
@@ -143,14 +147,8 @@ extern void		    audit_log_d_path(struct audit_buffer *ab,
 extern void		    audit_log_key(struct audit_buffer *ab,
 					  char *key);
 extern void		    audit_log_link_denied(const char *operation,
-						  struct path *link);
+						  const struct path *link);
 extern void		    audit_log_lost(const char *message);
-#ifdef CONFIG_SECURITY
-extern void 		    audit_log_secctx(struct audit_buffer *ab, u32 secid);
-#else
-static inline void	    audit_log_secctx(struct audit_buffer *ab, u32 secid)
-{ }
-#endif
 
 extern int audit_log_task_context(struct audit_buffer *ab);
 extern void audit_log_task_info(struct audit_buffer *ab,
@@ -159,10 +157,7 @@ extern void audit_log_task_info(struct audit_buffer *ab,
 extern int		    audit_update_lsm_rules(void);
 
 				/* Private API (for audit.c only) */
-extern int audit_filter_user(int type);
-extern int audit_filter_type(int type);
-extern int audit_rule_change(int type, __u32 portid, int seq,
-				void *data, size_t datasz);
+extern int audit_rule_change(int type, int seq, void *data, size_t datasz);
 extern int audit_list_rules_send(struct sk_buff *request_skb, int seq);
 
 extern u32 audit_enabled;
@@ -201,8 +196,6 @@ static inline void audit_log_key(struct audit_buffer *ab, char *key)
 { }
 static inline void audit_log_link_denied(const char *string,
 					 const struct path *link)
-{ }
-static inline void audit_log_secctx(struct audit_buffer *ab, u32 secid)
 { }
 static inline int audit_log_task_context(struct audit_buffer *ab)
 {
@@ -313,11 +306,7 @@ void audit_core_dumps(long signr);
 
 static inline void audit_seccomp(unsigned long syscall, long signr, int code)
 {
-	if (!audit_enabled)
-		return;
-
-	/* Force a record to be reported if a signal was delivered. */
-	if (signr || unlikely(!audit_dummy_context()))
+	if (audit_enabled && unlikely(!audit_dummy_context()))
 		__audit_seccomp(syscall, signr, code);
 }
 
@@ -330,7 +319,7 @@ static inline void audit_ptrace(struct task_struct *t)
 				/* Private API (for audit.c only) */
 extern unsigned int audit_serial(void);
 extern int auditsc_get_stamp(struct audit_context *ctx,
-			      struct timespec *t, unsigned int *serial);
+			      struct timespec64 *t, unsigned int *serial);
 extern int audit_set_loginuid(kuid_t loginuid);
 
 static inline kuid_t audit_get_loginuid(struct task_struct *tsk)
@@ -350,7 +339,7 @@ extern int __audit_socketcall(int nargs, unsigned long *args);
 extern int __audit_sockaddr(int len, void *addr);
 extern void __audit_fd_pair(int fd1, int fd2);
 extern void __audit_mq_open(int oflag, umode_t mode, struct mq_attr *attr);
-extern void __audit_mq_sendrecv(mqd_t mqdes, size_t msg_len, unsigned int msg_prio, const struct timespec *abs_timeout);
+extern void __audit_mq_sendrecv(mqd_t mqdes, size_t msg_len, unsigned int msg_prio, const struct timespec64 *abs_timeout);
 extern void __audit_mq_notify(mqd_t mqdes, const struct sigevent *notification);
 extern void __audit_mq_getsetattr(mqd_t mqdes, struct mq_attr *mqstat);
 extern int __audit_log_bprm_fcaps(struct linux_binprm *bprm,
@@ -358,6 +347,8 @@ extern int __audit_log_bprm_fcaps(struct linux_binprm *bprm,
 				  const struct cred *old);
 extern void __audit_log_capset(const struct cred *new, const struct cred *old);
 extern void __audit_mmap_fd(int fd, int flags);
+extern void __audit_log_kern_module(char *name);
+extern void __audit_fanotify(unsigned int response);
 
 static inline void audit_ipc_obj(struct kern_ipc_perm *ipcp)
 {
@@ -385,6 +376,20 @@ static inline int audit_socketcall(int nargs, unsigned long *args)
 		return __audit_socketcall(nargs, args);
 	return 0;
 }
+
+static inline int audit_socketcall_compat(int nargs, u32 *args)
+{
+	unsigned long a[AUDITSC_ARGS];
+	int i;
+
+	if (audit_dummy_context())
+		return 0;
+
+	for (i = 0; i < nargs; i++)
+		a[i] = (unsigned long)args[i];
+	return __audit_socketcall(nargs, a);
+}
+
 static inline int audit_sockaddr(int len, void *addr)
 {
 	if (unlikely(!audit_dummy_context()))
@@ -396,7 +401,7 @@ static inline void audit_mq_open(int oflag, umode_t mode, struct mq_attr *attr)
 	if (unlikely(!audit_dummy_context()))
 		__audit_mq_open(oflag, mode, attr);
 }
-static inline void audit_mq_sendrecv(mqd_t mqdes, size_t msg_len, unsigned int msg_prio, const struct timespec *abs_timeout)
+static inline void audit_mq_sendrecv(mqd_t mqdes, size_t msg_len, unsigned int msg_prio, const struct timespec64 *abs_timeout)
 {
 	if (unlikely(!audit_dummy_context()))
 		__audit_mq_sendrecv(mqdes, msg_len, msg_prio, abs_timeout);
@@ -432,6 +437,18 @@ static inline void audit_mmap_fd(int fd, int flags)
 {
 	if (unlikely(!audit_dummy_context()))
 		__audit_mmap_fd(fd, flags);
+}
+
+static inline void audit_log_kern_module(char *name)
+{
+	if (!audit_dummy_context())
+		__audit_log_kern_module(name);
+}
+
+static inline void audit_fanotify(unsigned int response)
+{
+	if (!audit_dummy_context())
+		__audit_fanotify(response);
 }
 
 extern int audit_n_rules;
@@ -488,7 +505,7 @@ static inline void __audit_seccomp(unsigned long syscall, long signr, int code)
 static inline void audit_seccomp(unsigned long syscall, long signr, int code)
 { }
 static inline int auditsc_get_stamp(struct audit_context *ctx,
-			      struct timespec *t, unsigned int *serial)
+			      struct timespec64 *t, unsigned int *serial)
 {
 	return 0;
 }
@@ -511,6 +528,12 @@ static inline int audit_socketcall(int nargs, unsigned long *args)
 {
 	return 0;
 }
+
+static inline int audit_socketcall_compat(int nargs, u32 *args)
+{
+	return 0;
+}
+
 static inline void audit_fd_pair(int fd1, int fd2)
 { }
 static inline int audit_sockaddr(int len, void *addr)
@@ -521,7 +544,7 @@ static inline void audit_mq_open(int oflag, umode_t mode, struct mq_attr *attr)
 { }
 static inline void audit_mq_sendrecv(mqd_t mqdes, size_t msg_len,
 				     unsigned int msg_prio,
-				     const struct timespec *abs_timeout)
+				     const struct timespec64 *abs_timeout)
 { }
 static inline void audit_mq_notify(mqd_t mqdes,
 				   const struct sigevent *notification)
@@ -539,6 +562,14 @@ static inline void audit_log_capset(const struct cred *new,
 { }
 static inline void audit_mmap_fd(int fd, int flags)
 { }
+
+static inline void audit_log_kern_module(char *name)
+{
+}
+
+static inline void audit_fanotify(unsigned int response)
+{ }
+
 static inline void audit_ptrace(struct task_struct *t)
 { }
 #define audit_n_rules 0

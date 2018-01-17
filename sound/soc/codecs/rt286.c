@@ -1046,19 +1046,21 @@ static struct snd_soc_dai_driver rt286_dai[] = {
 
 };
 
-static struct snd_soc_codec_driver soc_codec_dev_rt286 = {
+static const struct snd_soc_codec_driver soc_codec_dev_rt286 = {
 	.probe = rt286_probe,
 	.remove = rt286_remove,
 	.suspend = rt286_suspend,
 	.resume = rt286_resume,
 	.set_bias_level = rt286_set_bias_level,
 	.idle_bias_off = true,
-	.controls = rt286_snd_controls,
-	.num_controls = ARRAY_SIZE(rt286_snd_controls),
-	.dapm_widgets = rt286_dapm_widgets,
-	.num_dapm_widgets = ARRAY_SIZE(rt286_dapm_widgets),
-	.dapm_routes = rt286_dapm_routes,
-	.num_dapm_routes = ARRAY_SIZE(rt286_dapm_routes),
+	.component_driver = {
+		.controls		= rt286_snd_controls,
+		.num_controls		= ARRAY_SIZE(rt286_snd_controls),
+		.dapm_widgets		= rt286_dapm_widgets,
+		.num_dapm_widgets	= ARRAY_SIZE(rt286_dapm_widgets),
+		.dapm_routes		= rt286_dapm_routes,
+		.num_dapm_routes	= ARRAY_SIZE(rt286_dapm_routes),
+	},
 };
 
 static const struct regmap_config rt286_regmap = {
@@ -1100,6 +1102,20 @@ static const struct dmi_system_id force_combo_jack_table[] = {
 			DMI_MATCH(DMI_PRODUCT_NAME, "Skylake Client platform")
 		}
 	},
+	{
+		.ident = "Intel Kabylake RVP",
+		.matches = {
+			DMI_MATCH(DMI_PRODUCT_NAME, "Kabylake Client platform")
+		}
+	},
+	{
+		.ident = "Thinkpad Helix 2nd",
+		.matches = {
+			DMI_MATCH(DMI_SYS_VENDOR, "LENOVO"),
+			DMI_MATCH(DMI_PRODUCT_VERSION, "ThinkPad Helix 2nd")
+		}
+	},
+
 	{ }
 };
 

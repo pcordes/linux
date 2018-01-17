@@ -321,18 +321,20 @@ static int ad1836_remove(struct snd_soc_codec *codec)
 		AD1836_ADC_SERFMT_MASK, 0);
 }
 
-static struct snd_soc_codec_driver soc_codec_dev_ad1836 = {
+static const struct snd_soc_codec_driver soc_codec_dev_ad1836 = {
 	.probe = ad1836_probe,
 	.remove = ad1836_remove,
 	.suspend = ad1836_suspend,
 	.resume = ad1836_resume,
 
-	.controls = ad183x_controls,
-	.num_controls = ARRAY_SIZE(ad183x_controls),
-	.dapm_widgets = ad183x_dapm_widgets,
-	.num_dapm_widgets = ARRAY_SIZE(ad183x_dapm_widgets),
-	.dapm_routes = ad183x_dapm_routes,
-	.num_dapm_routes = ARRAY_SIZE(ad183x_dapm_routes),
+	.component_driver = {
+		.controls		= ad183x_controls,
+		.num_controls		= ARRAY_SIZE(ad183x_controls),
+		.dapm_widgets		= ad183x_dapm_widgets,
+		.num_dapm_widgets	= ARRAY_SIZE(ad183x_dapm_widgets),
+		.dapm_routes		= ad183x_dapm_routes,
+		.num_dapm_routes	= ARRAY_SIZE(ad183x_dapm_routes),
+	},
 };
 
 static const struct reg_default ad1836_reg_defaults[] = {

@@ -17,10 +17,10 @@
  * this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
-#include "mdp4_kms.h"
+#include <drm/drm_crtc.h>
+#include <drm/drm_crtc_helper.h>
 
-#include "drm_crtc.h"
-#include "drm_crtc_helper.h"
+#include "mdp4_kms.h"
 
 struct mdp4_dsi_encoder {
 	struct drm_encoder base;
@@ -46,13 +46,6 @@ static void mdp4_dsi_encoder_destroy(struct drm_encoder *encoder)
 static const struct drm_encoder_funcs mdp4_dsi_encoder_funcs = {
 	.destroy = mdp4_dsi_encoder_destroy,
 };
-
-static bool mdp4_dsi_encoder_mode_fixup(struct drm_encoder *encoder,
-					const struct drm_display_mode *mode,
-					struct drm_display_mode *adjusted_mode)
-{
-	return true;
-}
 
 static void mdp4_dsi_encoder_mode_set(struct drm_encoder *encoder,
 				      struct drm_display_mode *mode,
@@ -163,7 +156,6 @@ static void mdp4_dsi_encoder_enable(struct drm_encoder *encoder)
 }
 
 static const struct drm_encoder_helper_funcs mdp4_dsi_encoder_helper_funcs = {
-	.mode_fixup = mdp4_dsi_encoder_mode_fixup,
 	.mode_set = mdp4_dsi_encoder_mode_set,
 	.disable = mdp4_dsi_encoder_disable,
 	.enable = mdp4_dsi_encoder_enable,

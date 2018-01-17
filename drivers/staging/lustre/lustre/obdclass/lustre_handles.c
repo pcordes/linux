@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0
 /*
  * GPL HEADER START
  *
@@ -15,11 +16,7 @@
  *
  * You should have received a copy of the GNU General Public License
  * version 2 along with this program; If not, see
- * http://www.sun.com/software/products/lustre/docs/GPLv2.pdf
- *
- * Please contact Sun Microsystems, Inc., 4150 Network Circle, Santa Clara,
- * CA 95054 USA or visit www.sun.com if you need additional information or
- * have any questions.
+ * http://www.gnu.org/licenses/gpl-2.0.html
  *
  * GPL HEADER END
  */
@@ -40,9 +37,9 @@
 
 #define DEBUG_SUBSYSTEM S_CLASS
 
-#include "../include/obd_support.h"
-#include "../include/lustre_handles.h"
-#include "../include/lustre_lib.h"
+#include <obd_support.h>
+#include <lustre_handles.h>
+#include <lustre_lib.h>
 
 static __u64 handle_base;
 #define HANDLE_INCR 7
@@ -65,7 +62,7 @@ void class_handle_hash(struct portals_handle *h,
 {
 	struct handle_bucket *bucket;
 
-	LASSERT(h != NULL);
+	LASSERT(h);
 	LASSERT(list_empty(&h->h_link));
 
 	/*
@@ -134,21 +131,22 @@ void class_handle_unhash(struct portals_handle *h)
 }
 EXPORT_SYMBOL(class_handle_unhash);
 
-void *class_handle2object(__u64 cookie)
+void *class_handle2object(__u64 cookie, const void *owner)
 {
 	struct handle_bucket *bucket;
 	struct portals_handle *h;
 	void *retval = NULL;
 
-	LASSERT(handle_hash != NULL);
+	LASSERT(handle_hash);
 
 	/* Be careful when you want to change this code. See the
-	 * rcu_read_lock() definition on top this file. - jxiong */
+	 * rcu_read_lock() definition on top this file. - jxiong
+	 */
 	bucket = handle_hash + (cookie & HANDLE_HASH_MASK);
 
 	rcu_read_lock();
 	list_for_each_entry_rcu(h, &bucket->head, h_link) {
-		if (h->h_cookie != cookie)
+		if (h->h_cookie != cookie || h->h_owner != owner)
 			continue;
 
 		spin_lock(&h->h_lock);
@@ -167,10 +165,13 @@ EXPORT_SYMBOL(class_handle2object);
 
 void class_handle_free_cb(struct rcu_head *rcu)
 {
-	struct portals_handle *h = RCU2HANDLE(rcu);
-	void *ptr = (void *)(unsigned long)h->h_cookie;
+	struct portals_handle *h;
+	void *ptr;
 
-	if (h->h_ops->hop_free != NULL)
+	h = container_of(rcu, struct portals_handle, h_rcu);
+	ptr = (void *)(unsigned long)h->h_cookie;
+
+	if (h->h_ops->hop_free)
 		h->h_ops->hop_free(ptr, h->h_size);
 	else
 		kfree(ptr);
@@ -183,11 +184,11 @@ int class_handle_init(void)
 	struct timespec64 ts;
 	int seed[2];
 
-	LASSERT(handle_hash == NULL);
+	LASSERT(!handle_hash);
 
 	handle_hash = libcfs_kvzalloc(sizeof(*bucket) * HANDLE_HASH_SIZE,
 				      GFP_NOFS);
-	if (handle_hash == NULL)
+	if (!handle_hash)
 		return -ENOMEM;
 
 	spin_lock_init(&handle_base_lock);
@@ -217,7 +218,7 @@ static int cleanup_all_handles(void)
 		struct portals_handle *h;
 
 		spin_lock(&handle_hash[i].lock);
-		list_for_each_entry_rcu(h, &(handle_hash[i].head), h_link) {
+		list_for_each_entry_rcu(h, &handle_hash[i].head, h_link) {
 			CERROR("force clean handle %#llx addr %p ops %p\n",
 			       h->h_cookie, h, h->h_ops);
 
@@ -234,7 +235,7 @@ void class_handle_cleanup(void)
 {
 	int count;
 
-	LASSERT(handle_hash != NULL);
+	LASSERT(handle_hash);
 
 	count = cleanup_all_handles();
 

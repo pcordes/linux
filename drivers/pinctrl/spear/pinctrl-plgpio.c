@@ -13,7 +13,7 @@
 #include <linux/err.h>
 #include <linux/gpio/driver.h>
 #include <linux/io.h>
-#include <linux/module.h>
+#include <linux/init.h>
 #include <linux/of.h>
 #include <linux/of_platform.h>
 #include <linux/pinctrl/consumer.h>
@@ -204,7 +204,7 @@ static int plgpio_request(struct gpio_chip *chip, unsigned offset)
 	if (offset >= chip->ngpio)
 		return -EINVAL;
 
-	ret = pinctrl_request_gpio(gpio);
+	ret = pinctrl_gpio_request(gpio);
 	if (ret)
 		return ret;
 
@@ -242,7 +242,7 @@ err1:
 	if (!IS_ERR(plgpio->clk))
 		clk_disable(plgpio->clk);
 err0:
-	pinctrl_free_gpio(gpio);
+	pinctrl_gpio_free(gpio);
 	return ret;
 }
 
@@ -273,7 +273,7 @@ disable_clk:
 	if (!IS_ERR(plgpio->clk))
 		clk_disable(plgpio->clk);
 
-	pinctrl_free_gpio(gpio);
+	pinctrl_gpio_free(gpio);
 }
 
 /* PLGPIO IRQ */
@@ -401,7 +401,7 @@ static void plgpio_irq_handler(struct irq_desc *desc)
 			/* get correct irq line number */
 			pin = i * MAX_GPIO_PER_REG + pin;
 			generic_handle_irq(
-				irq_find_mapping(gc->irqdomain, pin));
+				irq_find_mapping(gc->irq.domain, pin));
 		}
 	}
 	chained_irq_exit(irqchip, desc);
@@ -705,7 +705,6 @@ static const struct of_device_id plgpio_of_match[] = {
 	{ .compatible = "st,spear-plgpio" },
 	{}
 };
-MODULE_DEVICE_TABLE(of, plgpio_of_match);
 
 static struct platform_driver plgpio_driver = {
 	.probe = plgpio_probe,
@@ -721,7 +720,3 @@ static int __init plgpio_init(void)
 	return platform_driver_register(&plgpio_driver);
 }
 subsys_initcall(plgpio_init);
-
-MODULE_AUTHOR("Viresh Kumar <viresh.kumar@linaro.org>");
-MODULE_DESCRIPTION("STMicroelectronics SPEAr PLGPIO driver");
-MODULE_LICENSE("GPL");

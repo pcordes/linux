@@ -90,7 +90,7 @@ struct srp_device {
 	struct list_head	dev_list;
 	struct ib_device       *dev;
 	struct ib_pd	       *pd;
-	struct ib_mr	       *global_mr;
+	u32			global_rkey;
 	u64			mr_page_mask;
 	int			mr_page_size;
 	int			mr_max_size;
@@ -153,7 +153,7 @@ struct srp_rdma_ch {
 	struct completion	done;
 	int			status;
 
-	struct ib_sa_path_rec	path;
+	struct sa_path_rec	path;
 	struct ib_sa_query     *path_query;
 	int			path_query_id;
 
@@ -164,6 +164,7 @@ struct srp_rdma_ch {
 	int			max_ti_iu_len;
 	int			comp_vector;
 
+	u64			tsk_mgmt_tag;
 	struct completion	tsk_mgmt_done;
 	u8			tsk_mgmt_status;
 	bool			connected;
@@ -179,7 +180,7 @@ struct srp_target_port {
 	spinlock_t		lock;
 
 	/* read only in the hot path */
-	struct ib_mr		*global_mr;
+	u32			global_rkey;
 	struct srp_rdma_ch	*ch;
 	u32			ch_count;
 	u32			lkey;
@@ -202,6 +203,8 @@ struct srp_target_port {
 	char			target_name[32];
 	unsigned int		scsi_id;
 	unsigned int		sg_tablesize;
+	int			mr_pool_size;
+	int			mr_per_cmd;
 	int			queue_size;
 	int			req_ring_size;
 	int			comp_vector;

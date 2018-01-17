@@ -17,12 +17,15 @@
 
 #include <linux/init.h>
 #include <linux/slab.h>
+#include <linux/mfd/wm97xx.h>
 #include <linux/module.h>
 #include <linux/device.h>
 #include <linux/regmap.h>
 #include <sound/core.h>
 #include <sound/pcm.h>
 #include <sound/ac97_codec.h>
+#include <sound/ac97/codec.h>
+#include <sound/ac97/compat.h>
 #include <sound/initval.h>
 #include <sound/pcm_params.h>
 #include <sound/tlv.h>
@@ -38,6 +41,7 @@ struct wm9713_priv {
 	u32 pll_in; /* PLL input frequency */
 	unsigned int hp_mixer[2];
 	struct mutex lock;
+	struct wm97xx_platform_data *mfd_pdata;
 };
 
 #define HPL_MIXER 0
@@ -231,7 +235,7 @@ static int wm9713_hp_mixer_put(struct snd_kcontrol *kcontrol,
 	struct soc_mixer_control *mc =
 		(struct soc_mixer_control *)kcontrol->private_value;
 	unsigned int mixer, mask, shift, old;
-	struct snd_soc_dapm_update update;
+	struct snd_soc_dapm_update update = { 0 };
 	bool change;
 
 	mixer = mc->shift >> 8;
@@ -1205,17 +1209,23 @@ static int wm9713_soc_resume(struct snd_soc_codec *codec)
 static int wm9713_soc_probe(struct snd_soc_codec *codec)
 {
 	struct wm9713_priv *wm9713 = snd_soc_codec_get_drvdata(codec);
-	struct regmap *regmap;
+	struct regmap *regmap = NULL;
 
-	wm9713->ac97 = snd_soc_new_ac97_codec(codec, WM9713_VENDOR_ID,
-		WM9713_VENDOR_ID_MASK);
-	if (IS_ERR(wm9713->ac97))
-		return PTR_ERR(wm9713->ac97);
-
-	regmap = devm_regmap_init_ac97(wm9713->ac97, &wm9713_regmap_config);
-	if (IS_ERR(regmap)) {
-		snd_soc_free_ac97_codec(wm9713->ac97);
-		return PTR_ERR(regmap);
+	if (wm9713->mfd_pdata) {
+		wm9713->ac97 = wm9713->mfd_pdata->ac97;
+		regmap = wm9713->mfd_pdata->regmap;
+	} else {
+#ifdef CONFIG_SND_SOC_AC97_BUS
+		wm9713->ac97 = snd_soc_new_ac97_codec(codec, WM9713_VENDOR_ID,
+						      WM9713_VENDOR_ID_MASK);
+		if (IS_ERR(wm9713->ac97))
+			return PTR_ERR(wm9713->ac97);
+		regmap = regmap_init_ac97(wm9713->ac97, &wm9713_regmap_config);
+		if (IS_ERR(regmap)) {
+			snd_soc_free_ac97_codec(wm9713->ac97);
+			return PTR_ERR(regmap);
+		}
+#endif
 	}
 
 	snd_soc_codec_init_regmap(codec, regmap);
@@ -1228,26 +1238,32 @@ static int wm9713_soc_probe(struct snd_soc_codec *codec)
 
 static int wm9713_soc_remove(struct snd_soc_codec *codec)
 {
+#ifdef CONFIG_SND_SOC_AC97_BUS
 	struct wm9713_priv *wm9713 = snd_soc_codec_get_drvdata(codec);
 
-	snd_soc_codec_exit_regmap(codec);
-	snd_soc_free_ac97_codec(wm9713->ac97);
+	if (!wm9713->mfd_pdata) {
+		snd_soc_codec_exit_regmap(codec);
+		snd_soc_free_ac97_codec(wm9713->ac97);
+	}
+#endif
 	return 0;
 }
 
-static struct snd_soc_codec_driver soc_codec_dev_wm9713 = {
+static const struct snd_soc_codec_driver soc_codec_dev_wm9713 = {
 	.probe = 	wm9713_soc_probe,
 	.remove = 	wm9713_soc_remove,
 	.suspend =	wm9713_soc_suspend,
 	.resume = 	wm9713_soc_resume,
 	.set_bias_level = wm9713_set_bias_level,
 
-	.controls = wm9713_snd_ac97_controls,
-	.num_controls = ARRAY_SIZE(wm9713_snd_ac97_controls),
-	.dapm_widgets = wm9713_dapm_widgets,
-	.num_dapm_widgets = ARRAY_SIZE(wm9713_dapm_widgets),
-	.dapm_routes = wm9713_audio_map,
-	.num_dapm_routes = ARRAY_SIZE(wm9713_audio_map),
+	.component_driver = {
+		.controls		= wm9713_snd_ac97_controls,
+		.num_controls		= ARRAY_SIZE(wm9713_snd_ac97_controls),
+		.dapm_widgets		= wm9713_dapm_widgets,
+		.num_dapm_widgets	= ARRAY_SIZE(wm9713_dapm_widgets),
+		.dapm_routes		= wm9713_audio_map,
+		.num_dapm_routes	= ARRAY_SIZE(wm9713_audio_map),
+	},
 };
 
 static int wm9713_probe(struct platform_device *pdev)
@@ -1260,6 +1276,7 @@ static int wm9713_probe(struct platform_device *pdev)
 
 	mutex_init(&wm9713->lock);
 
+	wm9713->mfd_pdata = dev_get_platdata(&pdev->dev);
 	platform_set_drvdata(pdev, wm9713);
 
 	return snd_soc_register_codec(&pdev->dev,

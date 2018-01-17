@@ -1,19 +1,10 @@
+// SPDX-License-Identifier: GPL-2.0
 /*
  * MediaTek xHCI Host Controller Driver
  *
  * Copyright (c) 2015 MediaTek Inc.
  * Author:
  *  Chunfeng Yun <chunfeng.yun@mediatek.com>
- *
- * This software is licensed under the terms of the GNU General Public
- * License version 2, as published by the Free Software Foundation, and
- * may be copied, distributed, and modified under those terms.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
  */
 
 #include <linux/clk.h>
@@ -43,6 +34,7 @@
 
 /* ip_pw_sts1 register */
 #define STS1_IP_SLEEP_STS	BIT(30)
+#define STS1_U3_MAC_RST	BIT(16)
 #define STS1_XHCI_RST		BIT(11)
 #define STS1_SYS125_RST	BIT(10)
 #define STS1_REF_RST		BIT(8)
@@ -91,16 +83,25 @@ static int xhci_mtk_host_enable(struct xhci_hcd_mtk *mtk)
 {
 	struct mu3c_ippc_regs __iomem *ippc = mtk->ippc_regs;
 	u32 value, check_val;
+	int u3_ports_disabed = 0;
 	int ret;
 	int i;
+
+	if (!mtk->has_ippc)
+		return 0;
 
 	/* power on host ip */
 	value = readl(&ippc->ip_pw_ctr1);
 	value &= ~CTRL1_IP_HOST_PDN;
 	writel(value, &ippc->ip_pw_ctr1);
 
-	/* power on and enable all u3 ports */
+	/* power on and enable u3 ports except skipped ones */
 	for (i = 0; i < mtk->num_u3_ports; i++) {
+		if ((0x1 << i) & mtk->u3p_dis_msk) {
+			u3_ports_disabed++;
+			continue;
+		}
+
 		value = readl(&ippc->u3_ctrl_p[i]);
 		value &= ~(CTRL_U3_PORT_PDN | CTRL_U3_PORT_DIS);
 		value |= CTRL_U3_PORT_HOST_SEL;
@@ -122,6 +123,9 @@ static int xhci_mtk_host_enable(struct xhci_hcd_mtk *mtk)
 	check_val = STS1_SYSPLL_STABLE | STS1_REF_RST |
 			STS1_SYS125_RST | STS1_XHCI_RST;
 
+	if (mtk->num_u3_ports > u3_ports_disabed)
+		check_val |= STS1_U3_MAC_RST;
+
 	ret = readl_poll_timeout(&ippc->ip_pw_sts1, value,
 			  (check_val == (value & check_val)), 100, 20000);
 	if (ret) {
@@ -139,8 +143,14 @@ static int xhci_mtk_host_disable(struct xhci_hcd_mtk *mtk)
 	int ret;
 	int i;
 
-	/* power down all u3 ports */
+	if (!mtk->has_ippc)
+		return 0;
+
+	/* power down u3 ports except skipped ones */
 	for (i = 0; i < mtk->num_u3_ports; i++) {
+		if ((0x1 << i) & mtk->u3p_dis_msk)
+			continue;
+
 		value = readl(&ippc->u3_ctrl_p[i]);
 		value |= CTRL_U3_PORT_PDN;
 		writel(value, &ippc->u3_ctrl_p[i]);
@@ -173,6 +183,9 @@ static int xhci_mtk_ssusb_config(struct xhci_hcd_mtk *mtk)
 	struct mu3c_ippc_regs __iomem *ippc = mtk->ippc_regs;
 	u32 value;
 
+	if (!mtk->has_ippc)
+		return 0;
+
 	/* reset whole ip */
 	value = readl(&ippc->ip_pw_ctr0);
 	value |= CTRL0_IP_SW_RST;
@@ -199,9 +212,50 @@ static int xhci_mtk_ssusb_config(struct xhci_hcd_mtk *mtk)
 	return xhci_mtk_host_enable(mtk);
 }
 
+/* ignore the error if the clock does not exist */
+static struct clk *optional_clk_get(struct device *dev, const char *id)
+{
+	struct clk *opt_clk;
+
+	opt_clk = devm_clk_get(dev, id);
+	/* ignore error number except EPROBE_DEFER */
+	if (IS_ERR(opt_clk) && (PTR_ERR(opt_clk) != -EPROBE_DEFER))
+		opt_clk = NULL;
+
+	return opt_clk;
+}
+
+static int xhci_mtk_clks_get(struct xhci_hcd_mtk *mtk)
+{
+	struct device *dev = mtk->dev;
+
+	mtk->sys_clk = devm_clk_get(dev, "sys_ck");
+	if (IS_ERR(mtk->sys_clk)) {
+		dev_err(dev, "fail to get sys_ck\n");
+		return PTR_ERR(mtk->sys_clk);
+	}
+
+	mtk->ref_clk = optional_clk_get(dev, "ref_ck");
+	if (IS_ERR(mtk->ref_clk))
+		return PTR_ERR(mtk->ref_clk);
+
+	mtk->mcu_clk = optional_clk_get(dev, "mcu_ck");
+	if (IS_ERR(mtk->mcu_clk))
+		return PTR_ERR(mtk->mcu_clk);
+
+	mtk->dma_clk = optional_clk_get(dev, "dma_ck");
+	return PTR_ERR_OR_ZERO(mtk->dma_clk);
+}
+
 static int xhci_mtk_clks_enable(struct xhci_hcd_mtk *mtk)
 {
 	int ret;
+
+	ret = clk_prepare_enable(mtk->ref_clk);
+	if (ret) {
+		dev_err(mtk->dev, "failed to enable ref_clk\n");
+		goto ref_clk_err;
+	}
 
 	ret = clk_prepare_enable(mtk->sys_clk);
 	if (ret) {
@@ -209,36 +263,36 @@ static int xhci_mtk_clks_enable(struct xhci_hcd_mtk *mtk)
 		goto sys_clk_err;
 	}
 
-	if (mtk->wakeup_src) {
-		ret = clk_prepare_enable(mtk->wk_deb_p0);
-		if (ret) {
-			dev_err(mtk->dev, "failed to enable wk_deb_p0\n");
-			goto usb_p0_err;
-		}
-
-		ret = clk_prepare_enable(mtk->wk_deb_p1);
-		if (ret) {
-			dev_err(mtk->dev, "failed to enable wk_deb_p1\n");
-			goto usb_p1_err;
-		}
+	ret = clk_prepare_enable(mtk->mcu_clk);
+	if (ret) {
+		dev_err(mtk->dev, "failed to enable mcu_clk\n");
+		goto mcu_clk_err;
 	}
+
+	ret = clk_prepare_enable(mtk->dma_clk);
+	if (ret) {
+		dev_err(mtk->dev, "failed to enable dma_clk\n");
+		goto dma_clk_err;
+	}
+
 	return 0;
 
-usb_p1_err:
-	clk_disable_unprepare(mtk->wk_deb_p0);
-usb_p0_err:
+dma_clk_err:
+	clk_disable_unprepare(mtk->mcu_clk);
+mcu_clk_err:
 	clk_disable_unprepare(mtk->sys_clk);
 sys_clk_err:
-	return -EINVAL;
+	clk_disable_unprepare(mtk->ref_clk);
+ref_clk_err:
+	return ret;
 }
 
 static void xhci_mtk_clks_disable(struct xhci_hcd_mtk *mtk)
 {
-	if (mtk->wakeup_src) {
-		clk_disable_unprepare(mtk->wk_deb_p1);
-		clk_disable_unprepare(mtk->wk_deb_p0);
-	}
+	clk_disable_unprepare(mtk->dma_clk);
+	clk_disable_unprepare(mtk->mcu_clk);
 	clk_disable_unprepare(mtk->sys_clk);
+	clk_disable_unprepare(mtk->ref_clk);
 }
 
 /* only clocks can be turn off for ip-sleep wakeup mode */
@@ -340,18 +394,6 @@ static int usb_wakeup_of_property_parse(struct xhci_hcd_mtk *mtk,
 	if (!mtk->wakeup_src)
 		return 0;
 
-	mtk->wk_deb_p0 = devm_clk_get(dev, "wakeup_deb_p0");
-	if (IS_ERR(mtk->wk_deb_p0)) {
-		dev_err(dev, "fail to get wakeup_deb_p0\n");
-		return PTR_ERR(mtk->wk_deb_p0);
-	}
-
-	mtk->wk_deb_p1 = devm_clk_get(dev, "wakeup_deb_p1");
-	if (IS_ERR(mtk->wk_deb_p1)) {
-		dev_err(dev, "fail to get wakeup_deb_p1\n");
-		return PTR_ERR(mtk->wk_deb_p1);
-	}
-
 	mtk->pericfg = syscon_regmap_lookup_by_phandle(dn,
 						"mediatek,syscon-wakeup");
 	if (IS_ERR(mtk->pericfg)) {
@@ -364,7 +406,6 @@ static int usb_wakeup_of_property_parse(struct xhci_hcd_mtk *mtk,
 
 static int xhci_mtk_setup(struct usb_hcd *hcd);
 static const struct xhci_driver_overrides xhci_mtk_overrides __initconst = {
-	.extra_priv_size = sizeof(struct xhci_hcd),
 	.reset = xhci_mtk_setup,
 };
 
@@ -482,12 +523,19 @@ static int xhci_mtk_setup(struct usb_hcd *hcd)
 		ret = xhci_mtk_ssusb_config(mtk);
 		if (ret)
 			return ret;
+	}
+
+	ret = xhci_gen_setup(hcd, xhci_mtk_quirks);
+	if (ret)
+		return ret;
+
+	if (usb_hcd_is_primary_hcd(hcd)) {
 		ret = xhci_mtk_sch_init(mtk);
 		if (ret)
 			return ret;
 	}
 
-	return xhci_gen_setup(hcd, xhci_mtk_quirks);
+	return ret;
 }
 
 static int xhci_mtk_probe(struct platform_device *pdev)
@@ -525,13 +573,14 @@ static int xhci_mtk_probe(struct platform_device *pdev)
 		return PTR_ERR(mtk->vusb33);
 	}
 
-	mtk->sys_clk = devm_clk_get(dev, "sys_ck");
-	if (IS_ERR(mtk->sys_clk)) {
-		dev_err(dev, "fail to get sys_ck\n");
-		return PTR_ERR(mtk->sys_clk);
-	}
+	ret = xhci_mtk_clks_get(mtk);
+	if (ret)
+		return ret;
 
 	mtk->lpm_support = of_property_read_bool(node, "usb3-lpm-capable");
+	/* optional property, ignore the error if it does not exist */
+	of_property_read_u32(node, "mediatek,u3p-dis-msk",
+			     &mtk->u3p_dis_msk);
 
 	ret = usb_wakeup_of_property_parse(mtk, node);
 	if (ret)
@@ -560,18 +609,15 @@ static int xhci_mtk_probe(struct platform_device *pdev)
 		goto disable_ldos;
 
 	irq = platform_get_irq(pdev, 0);
-	if (irq < 0)
+	if (irq < 0) {
+		ret = irq;
 		goto disable_clk;
+	}
 
 	/* Initialize dma_mask and coherent_dma_mask to 32-bits */
-	ret = dma_set_coherent_mask(dev, DMA_BIT_MASK(32));
+	ret = dma_set_mask_and_coherent(dev, DMA_BIT_MASK(32));
 	if (ret)
 		goto disable_clk;
-
-	if (!dev->dma_mask)
-		dev->dma_mask = &dev->coherent_dma_mask;
-	else
-		dma_set_mask(dev, DMA_BIT_MASK(32));
 
 	hcd = usb_create_hcd(driver, dev, dev_name(dev));
 	if (!hcd) {
@@ -586,7 +632,7 @@ static int xhci_mtk_probe(struct platform_device *pdev)
 	mtk->hcd = platform_get_drvdata(pdev);
 	platform_set_drvdata(pdev, mtk);
 
-	res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
+	res = platform_get_resource_byname(pdev, IORESOURCE_MEM, "mac");
 	hcd->regs = devm_ioremap_resource(dev, res);
 	if (IS_ERR(hcd->regs)) {
 		ret = PTR_ERR(hcd->regs);
@@ -595,11 +641,16 @@ static int xhci_mtk_probe(struct platform_device *pdev)
 	hcd->rsrc_start = res->start;
 	hcd->rsrc_len = resource_size(res);
 
-	res = platform_get_resource(pdev, IORESOURCE_MEM, 1);
-	mtk->ippc_regs = devm_ioremap_resource(dev, res);
-	if (IS_ERR(mtk->ippc_regs)) {
-		ret = PTR_ERR(mtk->ippc_regs);
-		goto put_usb2_hcd;
+	res = platform_get_resource_byname(pdev, IORESOURCE_MEM, "ippc");
+	if (res) {	/* ippc register is optional */
+		mtk->ippc_regs = devm_ioremap_resource(dev, res);
+		if (IS_ERR(mtk->ippc_regs)) {
+			ret = PTR_ERR(mtk->ippc_regs);
+			goto put_usb2_hcd;
+		}
+		mtk->has_ippc = true;
+	} else {
+		mtk->has_ippc = false;
 	}
 
 	for (phy_num = 0; phy_num < mtk->num_phys; phy_num++) {
@@ -630,12 +681,12 @@ static int xhci_mtk_probe(struct platform_device *pdev)
 		goto power_off_phys;
 	}
 
-	if (HCC_MAX_PSA(xhci->hcc_params) >= 4)
-		xhci->shared_hcd->can_do_streams = 1;
-
 	ret = usb_add_hcd(hcd, irq, IRQF_SHARED);
 	if (ret)
 		goto put_usb3_hcd;
+
+	if (HCC_MAX_PSA(xhci->hcc_params) >= 4)
+		xhci->shared_hcd->can_do_streams = 1;
 
 	ret = usb_add_hcd(xhci->shared_hcd, irq, IRQF_SHARED);
 	if (ret)
@@ -695,7 +746,6 @@ static int xhci_mtk_remove(struct platform_device *dev)
 	return 0;
 }
 
-#ifdef CONFIG_PM_SLEEP
 /*
  * if ip sleep fails, and all clocks are disabled, access register will hang
  * AHB bus, so stop polling roothubs to avoid regs access on bus suspend.
@@ -703,7 +753,7 @@ static int xhci_mtk_remove(struct platform_device *dev)
  * to wake up system immediately after system suspend complete if ip sleep
  * fails, it is what we wanted.
  */
-static int xhci_mtk_suspend(struct device *dev)
+static int __maybe_unused xhci_mtk_suspend(struct device *dev)
 {
 	struct xhci_hcd_mtk *mtk = dev_get_drvdata(dev);
 	struct usb_hcd *hcd = mtk->hcd;
@@ -722,7 +772,7 @@ static int xhci_mtk_suspend(struct device *dev)
 	return 0;
 }
 
-static int xhci_mtk_resume(struct device *dev)
+static int __maybe_unused xhci_mtk_resume(struct device *dev)
 {
 	struct xhci_hcd_mtk *mtk = dev_get_drvdata(dev);
 	struct usb_hcd *hcd = mtk->hcd;
@@ -744,14 +794,12 @@ static int xhci_mtk_resume(struct device *dev)
 static const struct dev_pm_ops xhci_mtk_pm_ops = {
 	SET_SYSTEM_SLEEP_PM_OPS(xhci_mtk_suspend, xhci_mtk_resume)
 };
-#define DEV_PM_OPS	(&xhci_mtk_pm_ops)
-#else
-#define DEV_PM_OPS	NULL
-#endif /* CONFIG_PM */
+#define DEV_PM_OPS IS_ENABLED(CONFIG_PM) ? &xhci_mtk_pm_ops : NULL
 
 #ifdef CONFIG_OF
 static const struct of_device_id mtk_xhci_of_match[] = {
 	{ .compatible = "mediatek,mt8173-xhci"},
+	{ .compatible = "mediatek,mtk-xhci"},
 	{ },
 };
 MODULE_DEVICE_TABLE(of, mtk_xhci_of_match);

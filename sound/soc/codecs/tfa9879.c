@@ -231,13 +231,14 @@ static const struct snd_soc_dapm_route tfa9879_dapm_routes[] = {
 };
 
 static const struct snd_soc_codec_driver tfa9879_codec = {
-	.controls = tfa9879_controls,
-	.num_controls = ARRAY_SIZE(tfa9879_controls),
-
-	.dapm_widgets = tfa9879_dapm_widgets,
-	.num_dapm_widgets = ARRAY_SIZE(tfa9879_dapm_widgets),
-	.dapm_routes = tfa9879_dapm_routes,
-	.num_dapm_routes = ARRAY_SIZE(tfa9879_dapm_routes),
+	.component_driver = {
+		.controls		= tfa9879_controls,
+		.num_controls		= ARRAY_SIZE(tfa9879_controls),
+		.dapm_widgets		= tfa9879_dapm_widgets,
+		.num_dapm_widgets	= ARRAY_SIZE(tfa9879_dapm_widgets),
+		.dapm_routes		= tfa9879_dapm_routes,
+		.num_dapm_routes	= ARRAY_SIZE(tfa9879_dapm_routes),
+	},
 };
 
 static const struct regmap_config tfa9879_regmap = {
@@ -311,9 +312,15 @@ static const struct i2c_device_id tfa9879_i2c_id[] = {
 };
 MODULE_DEVICE_TABLE(i2c, tfa9879_i2c_id);
 
+static const struct of_device_id tfa9879_of_match[] = {
+	{ .compatible = "nxp,tfa9879", },
+	{ }
+};
+
 static struct i2c_driver tfa9879_i2c_driver = {
 	.driver = {
 		.name = "tfa9879",
+		.of_match_table = tfa9879_of_match,
 	},
 	.probe = tfa9879_i2c_probe,
 	.remove = tfa9879_i2c_remove,

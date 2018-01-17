@@ -14,6 +14,7 @@
 #include <linux/sched.h>
 #include <linux/poll.h>
 #include <linux/iio/buffer.h>
+#include <linux/iio/buffer_impl.h>
 #include <linux/iio/buffer-dma.h>
 #include <linux/dma-mapping.h>
 #include <linux/sizes.h>
@@ -305,7 +306,7 @@ int iio_dma_buffer_request_update(struct iio_buffer *buffer)
 	queue->fileio.active_block = NULL;
 
 	spin_lock_irq(&queue->list_lock);
-	for (i = 0; i < 2; i++) {
+	for (i = 0; i < ARRAY_SIZE(queue->fileio.blocks); i++) {
 		block = queue->fileio.blocks[i];
 
 		/* If we can't re-use it free it */
@@ -323,7 +324,7 @@ int iio_dma_buffer_request_update(struct iio_buffer *buffer)
 
 	INIT_LIST_HEAD(&queue->incoming);
 
-	for (i = 0; i < 2; i++) {
+	for (i = 0; i < ARRAY_SIZE(queue->fileio.blocks); i++) {
 		if (queue->fileio.blocks[i]) {
 			block = queue->fileio.blocks[i];
 			if (block->state == IIO_BLOCK_STATE_DEAD) {

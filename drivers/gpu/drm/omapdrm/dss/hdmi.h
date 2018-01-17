@@ -23,8 +23,10 @@
 #include <linux/io.h>
 #include <linux/platform_device.h>
 #include <linux/hdmi.h>
-#include <video/omapdss.h>
+#include <sound/omap-hdmi-audio.h>
+#include <media/cec.h>
 
+#include "omapdss.h"
 #include "dss.h"
 
 /* HDMI Wrapper */
@@ -180,7 +182,7 @@ struct hdmi_video_format {
 };
 
 struct hdmi_config {
-	struct omap_video_timings timings;
+	struct videomode vm;
 	struct hdmi_avi_infoframe infoframe;
 	enum hdmi_core_hdmi_dvi hdmi_dvi_mode;
 };
@@ -233,6 +235,7 @@ struct hdmi_core_audio_config {
 struct hdmi_wp_data {
 	void __iomem *base;
 	phys_addr_t phys_base;
+	unsigned int version;
 };
 
 struct hdmi_pll_data {
@@ -240,18 +243,32 @@ struct hdmi_pll_data {
 
 	void __iomem *base;
 
+	struct platform_device *pdev;
 	struct hdmi_wp_data *wp;
+};
+
+struct hdmi_phy_features {
+	bool bist_ctrl;
+	bool ldo_voltage;
+	unsigned long max_phy;
 };
 
 struct hdmi_phy_data {
 	void __iomem *base;
 
+	const struct hdmi_phy_features *features;
 	u8 lane_function[4];
 	u8 lane_polarity[4];
 };
 
 struct hdmi_core_data {
 	void __iomem *base;
+	bool cts_swmode;
+	bool audio_use_mclk;
+
+	struct hdmi_wp_data *wp;
+	unsigned int core_pwr_cnt;
+	struct cec_adapter *adap;
 };
 
 static inline void hdmi_write_reg(void __iomem *base_addr, const u32 idx,
@@ -296,18 +313,17 @@ int hdmi_wp_set_pll_pwr(struct hdmi_wp_data *wp, enum hdmi_pll_pwr val);
 void hdmi_wp_video_config_format(struct hdmi_wp_data *wp,
 		struct hdmi_video_format *video_fmt);
 void hdmi_wp_video_config_interface(struct hdmi_wp_data *wp,
-		struct omap_video_timings *timings);
+		struct videomode *vm);
 void hdmi_wp_video_config_timing(struct hdmi_wp_data *wp,
-		struct omap_video_timings *timings);
+		struct videomode *vm);
 void hdmi_wp_init_vid_fmt_timings(struct hdmi_video_format *video_fmt,
-		struct omap_video_timings *timings, struct hdmi_config *param);
-int hdmi_wp_init(struct platform_device *pdev, struct hdmi_wp_data *wp);
+		struct videomode *vm, struct hdmi_config *param);
+int hdmi_wp_init(struct platform_device *pdev, struct hdmi_wp_data *wp,
+		 unsigned int version);
 phys_addr_t hdmi_wp_get_audio_dma_addr(struct hdmi_wp_data *wp);
 
 /* HDMI PLL funcs */
 void hdmi_pll_dump(struct hdmi_pll_data *pll, struct seq_file *s);
-void hdmi_pll_compute(struct hdmi_pll_data *pll,
-	unsigned long target_tmds, struct dss_pll_clock_info *pi);
 int hdmi_pll_init(struct platform_device *pdev, struct hdmi_pll_data *pll,
 	struct hdmi_wp_data *wp);
 void hdmi_pll_uninit(struct hdmi_pll_data *hpll);
@@ -316,7 +332,8 @@ void hdmi_pll_uninit(struct hdmi_pll_data *hpll);
 int hdmi_phy_configure(struct hdmi_phy_data *phy, unsigned long hfbitclk,
 	unsigned long lfbitclk);
 void hdmi_phy_dump(struct hdmi_phy_data *phy, struct seq_file *s);
-int hdmi_phy_init(struct platform_device *pdev, struct hdmi_phy_data *phy);
+int hdmi_phy_init(struct platform_device *pdev, struct hdmi_phy_data *phy,
+		  unsigned int version);
 int hdmi_phy_parse_lanes(struct hdmi_phy_data *phy, const u32 *lanes);
 
 /* HDMI common funcs */
@@ -361,7 +378,7 @@ struct omap_hdmi {
 	bool audio_configured;
 	struct omap_dss_audio audio_config;
 
-	/* This lock should be taken when booleans bellow are touched. */
+	/* This lock should be taken when booleans below are touched. */
 	spinlock_t audio_playing_lock;
 	bool audio_playing;
 	bool display_enabled;

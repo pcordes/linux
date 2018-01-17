@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: GPL-2.0
 #
 # Makefile for the USB serial device drivers.
 #
@@ -23,6 +24,7 @@ obj-$(CONFIG_USB_SERIAL_EDGEPORT)		+= io_edgeport.o
 obj-$(CONFIG_USB_SERIAL_EDGEPORT_TI)		+= io_ti.o
 obj-$(CONFIG_USB_SERIAL_EMPEG)			+= empeg.o
 obj-$(CONFIG_USB_SERIAL_F81232)			+= f81232.o
+obj-$(CONFIG_USB_SERIAL_F8153X)			+= f81534.o
 obj-$(CONFIG_USB_SERIAL_FTDI_SIO)		+= ftdi_sio.o
 obj-$(CONFIG_USB_SERIAL_GARMIN)			+= garmin_gps.o
 obj-$(CONFIG_USB_SERIAL_IPAQ)			+= ipaq.o
@@ -38,7 +40,6 @@ obj-$(CONFIG_USB_SERIAL_METRO)			+= metro-usb.o
 obj-$(CONFIG_USB_SERIAL_MOS7720)		+= mos7720.o
 obj-$(CONFIG_USB_SERIAL_MOS7840)		+= mos7840.o
 obj-$(CONFIG_USB_SERIAL_MXUPORT)		+= mxuport.o
-obj-$(CONFIG_USB_SERIAL_MXUPORT11)		+= mxu11x0.o
 obj-$(CONFIG_USB_SERIAL_NAVMAN)			+= navman.o
 obj-$(CONFIG_USB_SERIAL_OMNINET)		+= omninet.o
 obj-$(CONFIG_USB_SERIAL_OPTICON)		+= opticon.o
@@ -56,6 +57,7 @@ obj-$(CONFIG_USB_SERIAL_SSU100)			+= ssu100.o
 obj-$(CONFIG_USB_SERIAL_SYMBOL)			+= symbolserial.o
 obj-$(CONFIG_USB_SERIAL_WWAN)			+= usb_wwan.o
 obj-$(CONFIG_USB_SERIAL_TI)			+= ti_usb_3410_5052.o
+obj-$(CONFIG_USB_SERIAL_UPD78F0730)		+= upd78f0730.o
 obj-$(CONFIG_USB_SERIAL_VISOR)			+= visor.o
 obj-$(CONFIG_USB_SERIAL_WISHBONE)		+= wishbone-serial.o
 obj-$(CONFIG_USB_SERIAL_WHITEHEAT)		+= whiteheat.o

@@ -171,6 +171,9 @@ struct vim2m_ctx {
 	int			mode;
 
 	enum v4l2_colorspace	colorspace;
+	enum v4l2_ycbcr_encoding ycbcr_enc;
+	enum v4l2_xfer_func	xfer_func;
+	enum v4l2_quantization	quant;
 
 	/* Source and destination queue data */
 	struct vim2m_q_data   q_data[2];
@@ -340,7 +343,7 @@ static void schedule_irq(struct vim2m_dev *dev, int msec_timeout)
  * mem2mem callbacks
  */
 
-/**
+/*
  * job_ready() - check whether an instance is ready to be scheduled to run
  */
 static int job_ready(void *priv)
@@ -385,9 +388,9 @@ static void device_run(void *priv)
 	schedule_irq(dev, ctx->transtime);
 }
 
-static void device_isr(unsigned long priv)
+static void device_isr(struct timer_list *t)
 {
-	struct vim2m_dev *vim2m_dev = (struct vim2m_dev *)priv;
+	struct vim2m_dev *vim2m_dev = from_timer(vim2m_dev, t, timer);
 	struct vim2m_ctx *curr_ctx;
 	struct vb2_v4l2_buffer *src_vb, *dst_vb;
 	unsigned long flags;
@@ -493,6 +496,9 @@ static int vidioc_g_fmt(struct vim2m_ctx *ctx, struct v4l2_format *f)
 	f->fmt.pix.bytesperline	= (q_data->width * q_data->fmt->depth) >> 3;
 	f->fmt.pix.sizeimage	= q_data->sizeimage;
 	f->fmt.pix.colorspace	= ctx->colorspace;
+	f->fmt.pix.xfer_func	= ctx->xfer_func;
+	f->fmt.pix.ycbcr_enc	= ctx->ycbcr_enc;
+	f->fmt.pix.quantization	= ctx->quant;
 
 	return 0;
 }
@@ -549,6 +555,9 @@ static int vidioc_try_fmt_vid_cap(struct file *file, void *priv,
 		return -EINVAL;
 	}
 	f->fmt.pix.colorspace = ctx->colorspace;
+	f->fmt.pix.xfer_func = ctx->xfer_func;
+	f->fmt.pix.ycbcr_enc = ctx->ycbcr_enc;
+	f->fmt.pix.quantization = ctx->quant;
 
 	return vidioc_try_fmt(f, fmt);
 }
@@ -630,8 +639,12 @@ static int vidioc_s_fmt_vid_out(struct file *file, void *priv,
 		return ret;
 
 	ret = vidioc_s_fmt(file2ctx(file), f);
-	if (!ret)
+	if (!ret) {
 		ctx->colorspace = f->fmt.pix.colorspace;
+		ctx->xfer_func = f->fmt.pix.xfer_func;
+		ctx->ycbcr_enc = f->fmt.pix.ycbcr_enc;
+		ctx->quant = f->fmt.pix.quantization;
+	}
 	return ret;
 }
 
@@ -711,7 +724,7 @@ static const struct v4l2_ioctl_ops vim2m_ioctl_ops = {
 
 static int vim2m_queue_setup(struct vb2_queue *vq,
 				unsigned int *nbuffers, unsigned int *nplanes,
-				unsigned int sizes[], void *alloc_ctxs[])
+				unsigned int sizes[], struct device *alloc_devs[])
 {
 	struct vim2m_ctx *ctx = vb2_get_drv_priv(vq);
 	struct vim2m_q_data *q_data;
@@ -730,11 +743,6 @@ static int vim2m_queue_setup(struct vb2_queue *vq,
 
 	*nplanes = 1;
 	sizes[0] = size;
-
-	/*
-	 * videobuf2-vmalloc allocator is context-less so no need to set
-	 * alloc_ctxs array.
-	 */
 
 	dprintk(ctx->dev, "get %d buffer(s) of size %d each.\n", count, size);
 
@@ -807,7 +815,7 @@ static void vim2m_stop_streaming(struct vb2_queue *q)
 	}
 }
 
-static struct vb2_ops vim2m_qops = {
+static const struct vb2_ops vim2m_qops = {
 	.queue_setup	 = vim2m_queue_setup,
 	.buf_prepare	 = vim2m_buf_prepare,
 	.buf_queue	 = vim2m_buf_queue,
@@ -899,6 +907,7 @@ static int vim2m_open(struct file *file)
 	if (hdl->error) {
 		rc = hdl->error;
 		v4l2_ctrl_handler_free(hdl);
+		kfree(ctx);
 		goto open_unlock;
 	}
 	ctx->fh.ctrl_handler = hdl;
@@ -920,6 +929,7 @@ static int vim2m_open(struct file *file)
 		rc = PTR_ERR(ctx->fh.m2m_ctx);
 
 		v4l2_ctrl_handler_free(hdl);
+		v4l2_fh_exit(&ctx->fh);
 		kfree(ctx);
 		goto open_unlock;
 	}
@@ -964,7 +974,7 @@ static const struct v4l2_file_operations vim2m_fops = {
 	.mmap		= v4l2_m2m_fop_mmap,
 };
 
-static struct video_device vim2m_videodev = {
+static const struct video_device vim2m_videodev = {
 	.name		= MEM2MEM_NAME,
 	.vfl_dir	= VFL_DIR_M2M,
 	.fops		= &vim2m_fops,
@@ -973,7 +983,7 @@ static struct video_device vim2m_videodev = {
 	.release	= video_device_release_empty,
 };
 
-static struct v4l2_m2m_ops m2m_ops = {
+static const struct v4l2_m2m_ops m2m_ops = {
 	.device_run	= device_run,
 	.job_ready	= job_ready,
 	.job_abort	= job_abort,
@@ -1014,7 +1024,7 @@ static int vim2m_probe(struct platform_device *pdev)
 	v4l2_info(&dev->v4l2_dev,
 			"Device registered as /dev/video%d\n", vfd->num);
 
-	setup_timer(&dev->timer, device_isr, (long)dev);
+	timer_setup(&dev->timer, device_isr, 0);
 	platform_set_drvdata(pdev, dev);
 
 	dev->m2m_dev = v4l2_m2m_init(&m2m_ops);
@@ -1074,7 +1084,7 @@ static int __init vim2m_init(void)
 	if (ret)
 		platform_device_unregister(&vim2m_pdev);
 
-	return 0;
+	return ret;
 }
 
 module_init(vim2m_init);

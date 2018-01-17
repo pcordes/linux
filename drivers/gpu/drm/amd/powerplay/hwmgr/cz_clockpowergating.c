@@ -103,16 +103,6 @@ int cz_phm_ungate_all_display_phys(struct pp_hwmgr *hwmgr)
 	return 0;
 }
 
-static int cz_tf_uvd_power_gating_initialize(struct pp_hwmgr *hwmgr, void *pInput, void *pOutput, void *pStorage, int Result)
-{
-	return 0;
-}
-
-static int cz_tf_vce_power_gating_initialize(struct pp_hwmgr *hwmgr, void *pInput, void *pOutput, void *pStorage, int Result)
-{
-	return 0;
-}
-
 int cz_enable_disable_uvd_dpm(struct pp_hwmgr *hwmgr, bool enable)
 {
 	struct cz_hwmgr *cz_hwmgr = (struct cz_hwmgr *)(hwmgr->backend);
@@ -123,12 +113,12 @@ int cz_enable_disable_uvd_dpm(struct pp_hwmgr *hwmgr, bool enable)
 				  PHM_PlatformCaps_UVDDPM)) {
 		cz_hwmgr->dpm_flags |= DPMFlags_UVD_Enabled;
 		dpm_features |= UVD_DPM_MASK;
-		smum_send_msg_to_smc_with_parameter(hwmgr->smumgr,
+		smum_send_msg_to_smc_with_parameter(hwmgr,
 			    PPSMC_MSG_EnableAllSmuFeatures, dpm_features);
 	} else {
 		dpm_features |= UVD_DPM_MASK;
 		cz_hwmgr->dpm_flags &= ~DPMFlags_UVD_Enabled;
-		smum_send_msg_to_smc_with_parameter(hwmgr->smumgr,
+		smum_send_msg_to_smc_with_parameter(hwmgr,
 			   PPSMC_MSG_DisableAllSmuFeatures, dpm_features);
 	}
 	return 0;
@@ -144,12 +134,12 @@ int cz_enable_disable_vce_dpm(struct pp_hwmgr *hwmgr, bool enable)
 				PHM_PlatformCaps_VCEDPM)) {
 		cz_hwmgr->dpm_flags |= DPMFlags_VCE_Enabled;
 		dpm_features |= VCE_DPM_MASK;
-		smum_send_msg_to_smc_with_parameter(hwmgr->smumgr,
+		smum_send_msg_to_smc_with_parameter(hwmgr,
 			    PPSMC_MSG_EnableAllSmuFeatures, dpm_features);
 	} else {
 		dpm_features |= VCE_DPM_MASK;
 		cz_hwmgr->dpm_flags &= ~DPMFlags_VCE_Enabled;
-		smum_send_msg_to_smc_with_parameter(hwmgr->smumgr,
+		smum_send_msg_to_smc_with_parameter(hwmgr,
 			   PPSMC_MSG_DisableAllSmuFeatures, dpm_features);
 	}
 
@@ -157,96 +147,63 @@ int cz_enable_disable_vce_dpm(struct pp_hwmgr *hwmgr, bool enable)
 }
 
 
-int cz_dpm_powergate_uvd(struct pp_hwmgr *hwmgr, bool bgate)
+void cz_dpm_powergate_uvd(struct pp_hwmgr *hwmgr, bool bgate)
 {
 	struct cz_hwmgr *cz_hwmgr = (struct cz_hwmgr *)(hwmgr->backend);
-
-	if (cz_hwmgr->uvd_power_gated == bgate)
-		return 0;
 
 	cz_hwmgr->uvd_power_gated = bgate;
 
 	if (bgate) {
-		cgs_set_clockgating_state(hwmgr->device,
-						AMD_IP_BLOCK_TYPE_UVD,
-						AMD_CG_STATE_UNGATE);
 		cgs_set_powergating_state(hwmgr->device,
 						AMD_IP_BLOCK_TYPE_UVD,
 						AMD_PG_STATE_GATE);
+		cgs_set_clockgating_state(hwmgr->device,
+						AMD_IP_BLOCK_TYPE_UVD,
+						AMD_CG_STATE_GATE);
 		cz_dpm_update_uvd_dpm(hwmgr, true);
 		cz_dpm_powerdown_uvd(hwmgr);
 	} else {
 		cz_dpm_powerup_uvd(hwmgr);
 		cgs_set_clockgating_state(hwmgr->device,
 						AMD_IP_BLOCK_TYPE_UVD,
-						AMD_PG_STATE_GATE);
+						AMD_PG_STATE_UNGATE);
 		cgs_set_powergating_state(hwmgr->device,
 						AMD_IP_BLOCK_TYPE_UVD,
 						AMD_CG_STATE_UNGATE);
 		cz_dpm_update_uvd_dpm(hwmgr, false);
 	}
 
-	return 0;
 }
 
-int cz_dpm_powergate_vce(struct pp_hwmgr *hwmgr, bool bgate)
+void cz_dpm_powergate_vce(struct pp_hwmgr *hwmgr, bool bgate)
 {
 	struct cz_hwmgr *cz_hwmgr = (struct cz_hwmgr *)(hwmgr->backend);
 
-	if (phm_cap_enabled(hwmgr->platform_descriptor.platformCaps,
-					PHM_PlatformCaps_VCEPowerGating)) {
-		if (cz_hwmgr->vce_power_gated != bgate) {
-			if (bgate) {
-				cgs_set_clockgating_state(
-							hwmgr->device,
-							AMD_IP_BLOCK_TYPE_VCE,
-							AMD_CG_STATE_UNGATE);
-				cgs_set_powergating_state(
-							hwmgr->device,
-							AMD_IP_BLOCK_TYPE_VCE,
-							AMD_PG_STATE_GATE);
-				cz_enable_disable_vce_dpm(hwmgr, false);
-			/* TODO: to figure out why vce can't be poweroff*/
-				cz_hwmgr->vce_power_gated = true;
-			} else {
-				cz_dpm_powerup_vce(hwmgr);
-				cz_hwmgr->vce_power_gated = false;
-				cgs_set_clockgating_state(
-							hwmgr->device,
-							AMD_IP_BLOCK_TYPE_VCE,
-							AMD_PG_STATE_GATE);
-				cgs_set_powergating_state(
-							hwmgr->device,
-							AMD_IP_BLOCK_TYPE_VCE,
-							AMD_CG_STATE_UNGATE);
-				cz_dpm_update_vce_dpm(hwmgr);
-				cz_enable_disable_vce_dpm(hwmgr, true);
-				return 0;
-			}
-		}
+	if (bgate) {
+		cgs_set_powergating_state(
+					hwmgr->device,
+					AMD_IP_BLOCK_TYPE_VCE,
+					AMD_PG_STATE_GATE);
+		cgs_set_clockgating_state(
+					hwmgr->device,
+					AMD_IP_BLOCK_TYPE_VCE,
+					AMD_CG_STATE_GATE);
+		cz_enable_disable_vce_dpm(hwmgr, false);
+		cz_dpm_powerdown_vce(hwmgr);
+		cz_hwmgr->vce_power_gated = true;
 	} else {
+		cz_dpm_powerup_vce(hwmgr);
+		cz_hwmgr->vce_power_gated = false;
+		cgs_set_clockgating_state(
+					hwmgr->device,
+					AMD_IP_BLOCK_TYPE_VCE,
+					AMD_PG_STATE_UNGATE);
+		cgs_set_powergating_state(
+					hwmgr->device,
+					AMD_IP_BLOCK_TYPE_VCE,
+					AMD_CG_STATE_UNGATE);
 		cz_dpm_update_vce_dpm(hwmgr);
 		cz_enable_disable_vce_dpm(hwmgr, true);
-		return 0;
 	}
-
-	if (!cz_hwmgr->vce_power_gated)
-		cz_dpm_update_vce_dpm(hwmgr);
-
-	return 0;
 }
 
-
-static struct phm_master_table_item cz_enable_clock_power_gatings_list[] = {
-	/*we don't need an exit table here, because there is only D3 cold on Kv*/
-	{ phm_cf_want_uvd_power_gating, cz_tf_uvd_power_gating_initialize },
-	{ phm_cf_want_vce_power_gating, cz_tf_vce_power_gating_initialize },
-	/* to do { NULL, cz_tf_xdma_power_gating_enable }, */
-	{ NULL, NULL }
-};
-
-struct phm_master_table_header cz_phm_enable_clock_power_gatings_master = {
-	0,
-	PHM_MasterTableFlag_None,
-	cz_enable_clock_power_gatings_list
-};

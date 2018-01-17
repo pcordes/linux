@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0
 /*
  * GPL HEADER START
  *
@@ -15,11 +16,7 @@
  *
  * You should have received a copy of the GNU General Public License
  * version 2 along with this program; If not, see
- * http://www.sun.com/software/products/lustre/docs/GPLv2.pdf
- *
- * Please contact Sun Microsystems, Inc., 4150 Network Circle, Santa Clara,
- * CA 95054 USA or visit www.sun.com if you need additional information or
- * have any questions.
+ * http://www.gnu.org/licenses/gpl-2.0.html
  *
  * GPL HEADER END
  */
@@ -41,10 +38,10 @@
 #define DEBUG_SUBSYSTEM S_CLASS
 
 #include <linux/statfs.h>
-#include "../include/lustre_export.h"
-#include "../include/lustre_net.h"
-#include "../include/obd_support.h"
-#include "../include/obd_class.h"
+#include <lustre_export.h>
+#include <lustre_net.h>
+#include <obd_support.h>
+#include <obd_class.h>
 
 void statfs_unpack(struct kstatfs *sfs, struct obd_statfs *osfs)
 {

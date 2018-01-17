@@ -35,7 +35,7 @@
 #include <linux/kobject.h>
 #include <linux/moduleparam.h>
 #include <linux/pci.h>
-#include <asm/uaccess.h>
+#include <linux/uaccess.h>
 
 #include "acpiphp.h"
 #include "../pci.h"
@@ -107,7 +107,7 @@ static void __exit ibm_acpiphp_exit(void);
 
 static acpi_handle ibm_acpi_handle;
 static struct notification ibm_note;
-static struct bin_attribute ibm_apci_table_attr = {
+static struct bin_attribute ibm_apci_table_attr __ro_after_init = {
 	    .attr = {
 		    .name = "apci_table",
 		    .mode = S_IRUGO,
@@ -138,6 +138,8 @@ static union apci_descriptor *ibm_slot_from_id(int id)
 	char *table;
 
 	size = ibm_get_table_from_acpi(&table);
+	if (size < 0)
+		return NULL;
 	des = (union apci_descriptor *)table;
 	if (memcmp(des->header.sig, "aPCI", 4) != 0)
 		goto ibm_slot_done;

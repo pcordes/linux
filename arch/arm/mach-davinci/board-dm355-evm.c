@@ -14,7 +14,7 @@
 #include <linux/platform_device.h>
 #include <linux/mtd/mtd.h>
 #include <linux/mtd/partitions.h>
-#include <linux/mtd/nand.h>
+#include <linux/mtd/rawnand.h>
 #include <linux/i2c.h>
 #include <linux/gpio.h>
 #include <linux/clk.h>
@@ -114,8 +114,6 @@ static struct davinci_i2c_platform_data i2c_pdata = {
 	.sda_pin        = 15,
 	.scl_pin        = 14,
 };
-
-static struct snd_platform_data dm355_evm_snd_data;
 
 static int dm355evm_mmc_gpios = -EINVAL;
 
@@ -411,7 +409,7 @@ static __init void dm355_evm_init(void)
 			ARRAY_SIZE(dm355_evm_spi_info));
 
 	/* DM335 EVM uses ASP1; line-out is a stereo mini-jack */
-	dm355_init_asp1(ASP1_TX_EVT_EN | ASP1_RX_EVT_EN, &dm355_evm_snd_data);
+	dm355_init_asp1(ASP1_TX_EVT_EN | ASP1_RX_EVT_EN);
 }
 
 MACHINE_START(DAVINCI_DM355_EVM, "DaVinci DM355 EVM")

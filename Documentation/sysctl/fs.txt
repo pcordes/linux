@@ -265,12 +265,19 @@ aio-nr can grow to.
 
 ==============================================================
 
+mount-max:
+
+This denotes the maximum number of mounts that may exist
+in a mount namespace.
+
+==============================================================
+
 
 2. /proc/sys/fs/binfmt_misc
 ----------------------------------------------------------
 
 Documentation for the files in /proc/sys/fs/binfmt_misc is
-in Documentation/binfmt_misc.txt.
+in Documentation/admin-guide/binfmt-misc.rst.
 
 
 3. /proc/sys/fs/mqueue - POSIX message queues filesystem

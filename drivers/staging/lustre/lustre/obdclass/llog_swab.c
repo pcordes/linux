@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0
 /*
  * GPL HEADER START
  *
@@ -15,11 +16,7 @@
  *
  * You should have received a copy of the GNU General Public License
  * version 2 along with this program; If not, see
- * http://www.sun.com/software/products/lustre/docs/GPLv2.pdf
- *
- * Please contact Sun Microsystems, Inc., 4150 Network Circle, Santa Clara,
- * CA 95054 USA or visit www.sun.com if you need additional information or
- * have any questions.
+ * http://www.gnu.org/licenses/gpl-2.0.html
  *
  * GPL HEADER END
  */
@@ -42,12 +39,13 @@
 
 #define DEBUG_SUBSYSTEM S_LOG
 
-#include "../include/lustre_log.h"
+#include <llog_swab.h>
+#include <lustre_log.h>
 
 static void print_llogd_body(struct llogd_body *d)
 {
 	CDEBUG(D_OTHER, "llogd body: %p\n", d);
-	CDEBUG(D_OTHER, "\tlgd_logid.lgl_oi: "DOSTID"\n",
+	CDEBUG(D_OTHER, "\tlgd_logid.lgl_oi: " DOSTID "\n",
 	       POSTID(&d->lgd_logid.lgl_oi));
 	CDEBUG(D_OTHER, "\tlgd_logid.lgl_ogen: %#x\n", d->lgd_logid.lgl_ogen);
 	CDEBUG(D_OTHER, "\tlgd_ctxt_idx: %#x\n", d->lgd_ctxt_idx);
@@ -176,20 +174,23 @@ void lustre_swab_llog_rec(struct llog_rec_hdr *rec)
 		__swab64s(&cr->cr.cr_time);
 		lustre_swab_lu_fid(&cr->cr.cr_tfid);
 		lustre_swab_lu_fid(&cr->cr.cr_pfid);
-		if (CHANGELOG_REC_EXTENDED(&cr->cr)) {
-			struct llog_changelog_ext_rec *ext =
-				(struct llog_changelog_ext_rec *)rec;
+		if (cr->cr.cr_flags & CLF_RENAME) {
+			struct changelog_ext_rename *rnm =
+				changelog_rec_rename(&cr->cr);
 
-			lustre_swab_lu_fid(&ext->cr.cr_sfid);
-			lustre_swab_lu_fid(&ext->cr.cr_spfid);
-			tail = &ext->cr_tail;
-		} else {
-			tail = &cr->cr_tail;
+			lustre_swab_lu_fid(&rnm->cr_sfid);
+			lustre_swab_lu_fid(&rnm->cr_spfid);
 		}
-		tail = (struct llog_rec_tail *)((char *)tail +
+		/*
+		 * Because the tail follows a variable-length structure we need
+		 * to compute its location at runtime
+		 */
+		tail = (struct llog_rec_tail *)((char *)&cr->cr +
+						changelog_rec_size(&cr->cr) +
 						cr->cr.cr_namelen);
 		break;
 	}
+
 	case CHANGELOG_USER_REC:
 	{
 		struct llog_changelog_user_rec *cur =
@@ -228,6 +229,7 @@ void lustre_swab_llog_rec(struct llog_rec_hdr *rec)
 		__swab32s(&lsr->lsr_uid_h);
 		__swab32s(&lsr->lsr_gid);
 		__swab32s(&lsr->lsr_gid_h);
+		__swab64s(&lsr->lsr_valid);
 		tail = &lsr->lsr_tail;
 		break;
 	}
@@ -244,7 +246,7 @@ void lustre_swab_llog_rec(struct llog_rec_hdr *rec)
 		__swab32s(&llh->llh_flags);
 		__swab32s(&llh->llh_size);
 		__swab32s(&llh->llh_cat_idx);
-		tail = &llh->llh_tail;
+		tail = LLOG_HDR_TAIL(llh);
 		break;
 	}
 	case LLOG_LOGID_MAGIC:
@@ -290,8 +292,10 @@ static void print_llog_hdr(struct llog_log_hdr *h)
 	CDEBUG(D_OTHER, "\tllh_flags: %#x\n", h->llh_flags);
 	CDEBUG(D_OTHER, "\tllh_size: %#x\n", h->llh_size);
 	CDEBUG(D_OTHER, "\tllh_cat_idx: %#x\n", h->llh_cat_idx);
-	CDEBUG(D_OTHER, "\tllh_tail.lrt_index: %#x\n", h->llh_tail.lrt_index);
-	CDEBUG(D_OTHER, "\tllh_tail.lrt_len: %#x\n", h->llh_tail.lrt_len);
+	CDEBUG(D_OTHER, "\tllh_tail.lrt_index: %#x\n",
+	       LLOG_HDR_TAIL(h)->lrt_index);
+	CDEBUG(D_OTHER, "\tllh_tail.lrt_len: %#x\n",
+	       LLOG_HDR_TAIL(h)->lrt_len);
 }
 
 void lustre_swab_llog_hdr(struct llog_log_hdr *h)
@@ -346,9 +350,7 @@ void lustre_swab_lustre_cfg(struct lustre_cfg *lcfg)
 		__swab32s(&lcfg->lcfg_buflens[i]);
 
 	print_lustre_cfg(lcfg);
-	return;
 }
-EXPORT_SYMBOL(lustre_swab_lustre_cfg);
 
 /* used only for compatibility with old on-disk cfg_marker data */
 struct cfg_marker32 {
@@ -387,7 +389,8 @@ void lustre_swab_cfg_marker(struct cfg_marker *marker, int swab, int size)
 		 *
 		 * Overwrite fields from the end first, so they are not
 		 * clobbered, and use memmove() instead of memcpy() because
-		 * the source and target buffers overlap.  bug 16771 */
+		 * the source and target buffers overlap.  bug 16771
+		 */
 		createtime = cm32->cm_createtime;
 		canceltime = cm32->cm_canceltime;
 		memmove(marker->cm_comment, cm32->cm_comment, MTI_NAMELEN32);
@@ -406,7 +409,4 @@ void lustre_swab_cfg_marker(struct cfg_marker *marker, int swab, int size)
 		__swab64s(&marker->cm_createtime);
 		__swab64s(&marker->cm_canceltime);
 	}
-
-	return;
 }
-EXPORT_SYMBOL(lustre_swab_cfg_marker);

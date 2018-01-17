@@ -899,9 +899,9 @@ static int tda1004x_set_fe(struct dvb_frontend *fe)
 	return 0;
 }
 
-static int tda1004x_get_fe(struct dvb_frontend *fe)
+static int tda1004x_get_fe(struct dvb_frontend *fe,
+			   struct dtv_frontend_properties *fe_params)
 {
-	struct dtv_frontend_properties *fe_params = &fe->dtv_property_cache;
 	struct tda1004x_state* state = fe->demodulator_priv;
 	int status;
 
@@ -1245,7 +1245,7 @@ static void tda1004x_release(struct dvb_frontend* fe)
 	kfree(state);
 }
 
-static struct dvb_frontend_ops tda10045_ops = {
+static const struct dvb_frontend_ops tda10045_ops = {
 	.delsys = { SYS_DVBT },
 	.info = {
 		.name = "Philips TDA10045H DVB-T",
@@ -1315,7 +1315,7 @@ struct dvb_frontend* tda10045_attach(const struct tda1004x_config* config,
 	return &state->frontend;
 }
 
-static struct dvb_frontend_ops tda10046_ops = {
+static const struct dvb_frontend_ops tda10046_ops = {
 	.delsys = { SYS_DVBT },
 	.info = {
 		.name = "Philips TDA10046H DVB-T",

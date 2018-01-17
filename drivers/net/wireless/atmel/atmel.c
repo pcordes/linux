@@ -48,7 +48,7 @@
 #include <linux/timer.h>
 #include <asm/byteorder.h>
 #include <asm/io.h>
-#include <asm/uaccess.h>
+#include <linux/uaccess.h>
 #include <linux/module.h>
 #include <linux/netdevice.h>
 #include <linux/etherdevice.h>
@@ -513,7 +513,7 @@ struct atmel_private {
 	} station_state;
 
 	int operating_mode, power_mode;
-	time_t last_qual;
+	unsigned long last_qual;
 	int beacons_this_sec;
 	int channel;
 	int reg_domain, config_reg_domain;
@@ -586,7 +586,7 @@ static int atmel_validate_channel(struct atmel_private *priv, int channel);
 static void atmel_management_frame(struct atmel_private *priv,
 				   struct ieee80211_hdr *header,
 				   u16 frame_len, u8 rssi);
-static void atmel_management_timer(u_long a);
+static void atmel_management_timer(struct timer_list *t);
 static void atmel_send_command(struct atmel_private *priv, int command,
 			       void *cmd, int cmd_size);
 static int atmel_send_command_wait(struct atmel_private *priv, int command,
@@ -1036,9 +1036,8 @@ static void frag_rx_path(struct atmel_private *priv,
 				priv->dev->stats.rx_dropped++;
 			} else {
 				skb_reserve(skb, 2);
-				memcpy(skb_put(skb, priv->frag_len + 12),
-				       priv->rx_buf,
-				       priv->frag_len + 12);
+				skb_put_data(skb, priv->rx_buf,
+				             priv->frag_len + 12);
 				skb->protocol = eth_type_trans(skb, priv->dev);
 				skb->ip_summed = CHECKSUM_NONE;
 				netif_rx(skb);
@@ -1295,14 +1294,6 @@ static struct iw_statistics *atmel_get_wireless_stats(struct net_device *dev)
 	return &priv->wstats;
 }
 
-static int atmel_change_mtu(struct net_device *dev, int new_mtu)
-{
-	if ((new_mtu < 68) || (new_mtu > 2312))
-		return -EINVAL;
-	dev->mtu = new_mtu;
-	return 0;
-}
-
 static int atmel_set_mac_address(struct net_device *dev, void *p)
 {
 	struct sockaddr *addr = p;
@@ -1506,7 +1497,6 @@ static const struct file_operations atmel_proc_fops = {
 static const struct net_device_ops atmel_netdev_ops = {
 	.ndo_open 		= atmel_open,
 	.ndo_stop		= atmel_close,
-	.ndo_change_mtu 	= atmel_change_mtu,
 	.ndo_set_mac_address 	= atmel_set_mac_address,
 	.ndo_start_xmit 	= start_tx,
 	.ndo_do_ioctl 		= atmel_ioctl,
@@ -1589,16 +1579,18 @@ struct net_device *init_atmel_card(unsigned short irq, unsigned long port,
 	priv->default_beacon_period = priv->beacon_period = 100;
 	priv->listen_interval = 1;
 
-	init_timer(&priv->management_timer);
+	timer_setup(&priv->management_timer, atmel_management_timer, 0);
 	spin_lock_init(&priv->irqlock);
 	spin_lock_init(&priv->timerlock);
-	priv->management_timer.function = atmel_management_timer;
-	priv->management_timer.data = (unsigned long) dev;
 
 	dev->netdev_ops = &atmel_netdev_ops;
 	dev->wireless_handlers = &atmel_handler_def;
 	dev->irq = irq;
 	dev->base_addr = port;
+
+	/* MTU range: 68 - 2312 */
+	dev->min_mtu = 68;
+	dev->max_mtu = MAX_WIRELESS_BODY - ETH_FCS_LEN;
 
 	SET_NETDEV_DEV(dev, sys_dev);
 
@@ -2275,7 +2267,7 @@ static int atmel_set_freq(struct net_device *dev,
 		fwrq->m = ieee80211_frequency_to_channel(f);
 	}
 	/* Setting by channel number */
-	if ((fwrq->m > 1000) || (fwrq->e > 0))
+	if (fwrq->m < 0 || fwrq->m > 1000 || fwrq->e > 0)
 		rc = -EOPNOTSUPP;
 	else {
 		int channel = fwrq->m;
@@ -2434,7 +2426,7 @@ static int atmel_get_range(struct net_device *dev,
 
 			/* Values in MHz -> * 10^5 * 10 */
 			range->freq[k].m = 100000 *
-			 ieee80211_channel_to_frequency(i, IEEE80211_BAND_2GHZ);
+			 ieee80211_channel_to_frequency(i, NL80211_BAND_2GHZ);
 			range->freq[k++].e = 1;
 		}
 		range->num_frequency = k;
@@ -3441,10 +3433,9 @@ static void atmel_management_frame(struct atmel_private *priv,
 }
 
 /* run when timer expires */
-static void atmel_management_timer(u_long a)
+static void atmel_management_timer(struct timer_list *t)
 {
-	struct net_device *dev = (struct net_device *) a;
-	struct atmel_private *priv = netdev_priv(dev);
+	struct atmel_private *priv = from_timer(priv, t, management_timer);
 	unsigned long flags;
 
 	/* Check if the card has been yanked. */

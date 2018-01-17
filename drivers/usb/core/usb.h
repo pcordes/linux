@@ -1,3 +1,8 @@
+// SPDX-License-Identifier: GPL-2.0
+/*
+ * Released under the GPLv2 only.
+ */
+
 #include <linux/pm.h>
 #include <linux/acpi.h>
 
@@ -45,7 +50,7 @@ static inline unsigned usb_get_max_power(struct usb_device *udev,
 		struct usb_host_config *c)
 {
 	/* SuperSpeed power is in 8 mA units; others are in 2 mA units */
-	unsigned mul = (udev->speed == USB_SPEED_SUPER ? 8 : 2);
+	unsigned mul = (udev->speed >= USB_SPEED_SUPER ? 8 : 2);
 
 	return c->desc.bMaxPower * mul;
 }
@@ -68,6 +73,7 @@ extern void usb_hub_cleanup(void);
 extern int usb_major_init(void);
 extern void usb_major_cleanup(void);
 extern int usb_device_supports_lpm(struct usb_device *udev);
+extern int usb_port_disable(struct usb_device *udev);
 
 #ifdef	CONFIG_PM
 

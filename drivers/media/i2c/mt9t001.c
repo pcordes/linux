@@ -233,10 +233,21 @@ static int __mt9t001_set_power(struct mt9t001 *mt9t001, bool on)
 	ret = mt9t001_reset(mt9t001);
 	if (ret < 0) {
 		dev_err(&client->dev, "Failed to reset the camera\n");
-		return ret;
+		goto e_power;
 	}
 
-	return v4l2_ctrl_handler_setup(&mt9t001->ctrls);
+	ret = v4l2_ctrl_handler_setup(&mt9t001->ctrls);
+	if (ret < 0) {
+		dev_err(&client->dev, "Failed to set up control handlers\n");
+		goto e_power;
+	}
+
+	return 0;
+
+e_power:
+	mt9t001_power_off(mt9t001);
+
+	return ret;
 }
 
 /* -----------------------------------------------------------------------------
@@ -811,15 +822,15 @@ static int mt9t001_close(struct v4l2_subdev *subdev, struct v4l2_subdev_fh *fh)
 	return mt9t001_set_power(subdev, 0);
 }
 
-static struct v4l2_subdev_core_ops mt9t001_subdev_core_ops = {
+static const struct v4l2_subdev_core_ops mt9t001_subdev_core_ops = {
 	.s_power = mt9t001_set_power,
 };
 
-static struct v4l2_subdev_video_ops mt9t001_subdev_video_ops = {
+static const struct v4l2_subdev_video_ops mt9t001_subdev_video_ops = {
 	.s_stream = mt9t001_s_stream,
 };
 
-static struct v4l2_subdev_pad_ops mt9t001_subdev_pad_ops = {
+static const struct v4l2_subdev_pad_ops mt9t001_subdev_pad_ops = {
 	.enum_mbus_code = mt9t001_enum_mbus_code,
 	.enum_frame_size = mt9t001_enum_frame_size,
 	.get_fmt = mt9t001_get_format,
@@ -828,13 +839,13 @@ static struct v4l2_subdev_pad_ops mt9t001_subdev_pad_ops = {
 	.set_selection = mt9t001_set_selection,
 };
 
-static struct v4l2_subdev_ops mt9t001_subdev_ops = {
+static const struct v4l2_subdev_ops mt9t001_subdev_ops = {
 	.core = &mt9t001_subdev_core_ops,
 	.video = &mt9t001_subdev_video_ops,
 	.pad = &mt9t001_subdev_pad_ops,
 };
 
-static struct v4l2_subdev_internal_ops mt9t001_subdev_internal_ops = {
+static const struct v4l2_subdev_internal_ops mt9t001_subdev_internal_ops = {
 	.registered = mt9t001_registered,
 	.open = mt9t001_open,
 	.close = mt9t001_close,

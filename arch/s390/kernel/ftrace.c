@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0
 /*
  * Dynamic function tracer architecture backend.
  *
@@ -17,6 +18,7 @@
 #include <trace/syscall.h>
 #include <asm/asm-offsets.h>
 #include <asm/cacheflush.h>
+#include <asm/set_memory.h>
 #include "entry.h"
 
 /*
@@ -172,6 +174,8 @@ int __init ftrace_dyn_arch_init(void)
 	return 0;
 }
 
+#ifdef CONFIG_MODULES
+
 static int __init ftrace_plt_init(void)
 {
 	unsigned int *ip;
@@ -189,6 +193,8 @@ static int __init ftrace_plt_init(void)
 	return 0;
 }
 device_initcall(ftrace_plt_init);
+
+#endif /* CONFIG_MODULES */
 
 #ifdef CONFIG_FUNCTION_GRAPH_TRACER
 /*
@@ -209,7 +215,8 @@ unsigned long prepare_ftrace_return(unsigned long parent, unsigned long ip)
 	/* Only trace if the calling function expects to. */
 	if (!ftrace_graph_entry(&trace))
 		goto out;
-	if (ftrace_push_return_trace(parent, ip, &trace.depth, 0) == -EBUSY)
+	if (ftrace_push_return_trace(parent, ip, &trace.depth, 0,
+				     NULL) == -EBUSY)
 		goto out;
 	parent = (unsigned long) return_to_handler;
 out:

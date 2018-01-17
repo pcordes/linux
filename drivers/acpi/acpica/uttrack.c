@@ -5,7 +5,7 @@
  *****************************************************************************/
 
 /*
- * Copyright (C) 2000 - 2016, Intel Corp.
+ * Copyright (C) 2000 - 2017, Intel Corp.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -90,17 +90,15 @@ acpi_ut_remove_allocation(struct acpi_debug_mem_block *address,
  ******************************************************************************/
 
 acpi_status
-acpi_ut_create_list(char *list_name,
+acpi_ut_create_list(const char *list_name,
 		    u16 object_size, struct acpi_memory_list **return_cache)
 {
 	struct acpi_memory_list *cache;
 
-	cache = acpi_os_allocate(sizeof(struct acpi_memory_list));
+	cache = acpi_os_allocate_zeroed(sizeof(struct acpi_memory_list));
 	if (!cache) {
 		return (AE_NO_MEMORY);
 	}
-
-	memset(cache, 0, sizeof(struct acpi_memory_list));
 
 	cache->list_name = list_name;
 	cache->object_size = object_size;
@@ -593,6 +591,10 @@ void acpi_ut_dump_allocations(u32 component, const char *module)
 		return_VOID;
 	}
 
+	if (!acpi_gbl_global_list) {
+		goto exit;
+	}
+
 	element = acpi_gbl_global_list->list_head;
 	while (element) {
 		if ((element->component & component) &&
@@ -604,7 +606,7 @@ void acpi_ut_dump_allocations(u32 component, const char *module)
 
 			if (element->size <
 			    sizeof(struct acpi_common_descriptor)) {
-				acpi_os_printf("%p Length 0x%04X %9.9s-%u "
+				acpi_os_printf("%p Length 0x%04X %9.9s-%4.4u "
 					       "[Not a Descriptor - too small]\n",
 					       descriptor, element->size,
 					       element->module, element->line);
@@ -614,7 +616,7 @@ void acpi_ut_dump_allocations(u32 component, const char *module)
 				if (ACPI_GET_DESCRIPTOR_TYPE(descriptor) !=
 				    ACPI_DESC_TYPE_CACHED) {
 					acpi_os_printf
-					    ("%p Length 0x%04X %9.9s-%u [%s] ",
+					    ("%p Length 0x%04X %9.9s-%4.4u [%s] ",
 					     descriptor, element->size,
 					     element->module, element->line,
 					     acpi_ut_get_descriptor_name
@@ -707,12 +709,13 @@ void acpi_ut_dump_allocations(u32 component, const char *module)
 		element = element->next;
 	}
 
+exit:
 	(void)acpi_ut_release_mutex(ACPI_MTX_MEMORY);
 
 	/* Print summary */
 
 	if (!num_outstanding) {
-		ACPI_INFO((AE_INFO, "No outstanding allocations"));
+		ACPI_INFO(("No outstanding allocations"));
 	} else {
 		ACPI_ERROR((AE_INFO, "%u(0x%X) Outstanding allocations",
 			    num_outstanding, num_outstanding));

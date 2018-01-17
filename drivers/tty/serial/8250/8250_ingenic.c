@@ -1,17 +1,9 @@
+// SPDX-License-Identifier: GPL-2.0+
 /*
  * Copyright (C) 2010 Lars-Peter Clausen <lars@metafoo.de>
  * Copyright (C) 2015 Imagination Technologies
  *
  * Ingenic SoC UART support
- *
- * This program is free software; you can redistribute	 it and/or modify it
- * under  the terms of	 the GNU General  Public License as published by the
- * Free Software Foundation;  either version 2 of the	License, or (at your
- * option) any later version.
- *
- * You should have received a copy of the  GNU General Public License along
- * with this program; if not, write  to the Free Software Foundation, Inc.,
- * 675 Mass Ave, Cambridge, MA 02139, USA.
  */
 
 #include <linux/clk.h>
@@ -48,20 +40,19 @@ static const struct of_device_id of_match[];
 #define UART_MCR_MDCE	BIT(7)
 #define UART_MCR_FCM	BIT(6)
 
-#ifdef CONFIG_SERIAL_EARLYCON
 static struct earlycon_device *early_device;
 
-static uint8_t __init early_in(struct uart_port *port, int offset)
+static uint8_t early_in(struct uart_port *port, int offset)
 {
 	return readl(port->membase + (offset << 2));
 }
 
-static void __init early_out(struct uart_port *port, int offset, uint8_t value)
+static void early_out(struct uart_port *port, int offset, uint8_t value)
 {
 	writel(value, port->membase + (offset << 2));
 }
 
-static void __init ingenic_early_console_putc(struct uart_port *port, int c)
+static void ingenic_early_console_putc(struct uart_port *port, int c)
 {
 	uint8_t lsr;
 
@@ -72,7 +63,7 @@ static void __init ingenic_early_console_putc(struct uart_port *port, int c)
 	early_out(port, UART_TX, c);
 }
 
-static void __init ingenic_early_console_write(struct console *console,
+static void ingenic_early_console_write(struct console *console,
 					      const char *s, unsigned int count)
 {
 	uart_console_write(&early_device->port, s, count,
@@ -141,7 +132,6 @@ OF_EARLYCON_DECLARE(jz4775_uart, "ingenic,jz4775-uart",
 EARLYCON_DECLARE(jz4780_uart, ingenic_early_console_setup);
 OF_EARLYCON_DECLARE(jz4780_uart, "ingenic,jz4780-uart",
 		    ingenic_early_console_setup);
-#endif /* CONFIG_SERIAL_EARLYCON */
 
 static void ingenic_uart_serial_out(struct uart_port *p, int offset, int value)
 {
@@ -154,14 +144,18 @@ static void ingenic_uart_serial_out(struct uart_port *p, int offset, int value)
 		break;
 
 	case UART_IER:
-		/* Enable receive timeout interrupt with the
-		 * receive line status interrupt */
+		/*
+		 * Enable receive timeout interrupt with the receive line
+		 * status interrupt.
+		 */
 		value |= (value & 0x4) << 2;
 		break;
 
 	case UART_MCR:
-		/* If we have enabled modem status IRQs we should enable modem
-		 * mode. */
+		/*
+		 * If we have enabled modem status IRQs we should enable
+		 * modem mode.
+		 */
 		ier = p->serial_in(p, UART_IER);
 
 		if (ier & UART_IER_MSI)

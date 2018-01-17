@@ -388,8 +388,7 @@ static int adau1977_power_disable(struct adau1977 *adau1977)
 
 	regcache_mark_dirty(adau1977->regmap);
 
-	if (adau1977->reset_gpio)
-		gpiod_set_value_cansleep(adau1977->reset_gpio, 0);
+	gpiod_set_value_cansleep(adau1977->reset_gpio, 0);
 
 	regcache_cache_only(adau1977->regmap, true);
 
@@ -420,8 +419,7 @@ static int adau1977_power_enable(struct adau1977 *adau1977)
 			goto err_disable_avdd;
 	}
 
-	if (adau1977->reset_gpio)
-		gpiod_set_value_cansleep(adau1977->reset_gpio, 1);
+	gpiod_set_value_cansleep(adau1977->reset_gpio, 1);
 
 	regcache_cache_only(adau1977->regmap, false);
 
@@ -867,18 +865,20 @@ static int adau1977_codec_probe(struct snd_soc_codec *codec)
 	return 0;
 }
 
-static struct snd_soc_codec_driver adau1977_codec_driver = {
+static const struct snd_soc_codec_driver adau1977_codec_driver = {
 	.probe = adau1977_codec_probe,
 	.set_bias_level = adau1977_set_bias_level,
 	.set_sysclk = adau1977_set_sysclk,
 	.idle_bias_off = true,
 
-	.controls = adau1977_snd_controls,
-	.num_controls = ARRAY_SIZE(adau1977_snd_controls),
-	.dapm_widgets = adau1977_dapm_widgets,
-	.num_dapm_widgets = ARRAY_SIZE(adau1977_dapm_widgets),
-	.dapm_routes = adau1977_dapm_routes,
-	.num_dapm_routes = ARRAY_SIZE(adau1977_dapm_routes),
+	.component_driver = {
+		.controls		= adau1977_snd_controls,
+		.num_controls		= ARRAY_SIZE(adau1977_snd_controls),
+		.dapm_widgets		= adau1977_dapm_widgets,
+		.num_dapm_widgets	= ARRAY_SIZE(adau1977_dapm_widgets),
+		.dapm_routes		= adau1977_dapm_routes,
+		.num_dapm_routes	= ARRAY_SIZE(adau1977_dapm_routes),
+	},
 };
 
 static int adau1977_setup_micbias(struct adau1977 *adau1977)

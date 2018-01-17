@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0 */
 /*
  * This file contains definitions and data structures specific
  * to Marvell 802.11 NIC. It contains the Device Information
@@ -99,6 +100,7 @@ struct lbs_private {
 	/* Hardware access */
 	void *card;
 	bool iface_running;
+	u8 is_polling; /* host has to poll the card irq */
 	u8 fw_ready;
 	u8 surpriseremoved;
 	u8 setup_fw_on_resume;

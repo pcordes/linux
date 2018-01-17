@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0
 
 #include <stdio.h>
 #include <unistd.h>
@@ -10,6 +11,7 @@
 #include <linux/err.h>
 #include <traceevent/event-parse.h>
 #include <api/fs/tracing_path.h>
+#include <api/fs/fs.h>
 #include "trace-event.h"
 #include "machine.h"
 #include "util.h"
@@ -103,4 +105,12 @@ trace_event__tp_format(const char *sys, const char *name)
 		return ERR_PTR(-ENOMEM);
 
 	return tp_format(sys, name);
+}
+
+struct event_format *trace_event__tp_format_id(int id)
+{
+	if (!tevent_initialized && trace_event__init2())
+		return ERR_PTR(-ENOMEM);
+
+	return pevent_find_event(tevent.pevent, id);
 }

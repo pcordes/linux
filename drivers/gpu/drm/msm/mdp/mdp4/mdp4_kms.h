@@ -18,12 +18,14 @@
 #ifndef __MDP4_KMS_H__
 #define __MDP4_KMS_H__
 
+#include <drm/drm_panel.h>
+
 #include "msm_drv.h"
 #include "msm_kms.h"
 #include "mdp/mdp_kms.h"
 #include "mdp4.xml.h"
 
-#include "drm_panel.h"
+struct device_node;
 
 struct mdp4_kms {
 	struct mdp_kms base;
@@ -32,13 +34,8 @@ struct mdp4_kms {
 
 	int rev;
 
-	/* mapper-id used to request GEM buffer mapped for scanout: */
-	int id;
-
 	void __iomem *mmio;
 
-	struct regulator *dsi_pll_vdda;
-	struct regulator *dsi_pll_vddio;
 	struct regulator *vdd;
 
 	struct clk *clk;
@@ -48,9 +45,11 @@ struct mdp4_kms {
 
 	struct mdp_irq error_handler;
 
+	bool rpm_enabled;
+
 	/* empty/blank cursor bo to use when cursor is "disabled" */
 	struct drm_gem_object *blank_cursor_bo;
-	uint32_t blank_cursor_iova;
+	uint64_t blank_cursor_iova;
 };
 #define to_mdp4_kms(x) container_of(x, struct mdp4_kms, base)
 
@@ -199,7 +198,6 @@ struct drm_plane *mdp4_plane_init(struct drm_device *dev,
 		enum mdp4_pipe pipe_id, bool private_plane);
 
 uint32_t mdp4_crtc_vblank(struct drm_crtc *crtc);
-void mdp4_crtc_cancel_pending_flip(struct drm_crtc *crtc, struct drm_file *file);
 void mdp4_crtc_set_config(struct drm_crtc *crtc, uint32_t config);
 void mdp4_crtc_set_intf(struct drm_crtc *crtc, enum mdp4_intf intf, int mixer);
 void mdp4_crtc_wait_for_commit_done(struct drm_crtc *crtc);

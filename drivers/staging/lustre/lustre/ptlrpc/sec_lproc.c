@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0
 /*
  * GPL HEADER START
  *
@@ -15,11 +16,7 @@
  *
  * You should have received a copy of the GNU General Public License
  * version 2 along with this program; If not, see
- * http://www.sun.com/software/products/lustre/docs/GPLv2.pdf
- *
- * Please contact Sun Microsystems, Inc., 4150 Network Circle, Santa Clara,
- * CA 95054 USA or visit www.sun.com if you need additional information or
- * have any questions.
+ * http://www.gnu.org/licenses/gpl-2.0.html
  *
  * GPL HEADER END
  */
@@ -38,16 +35,16 @@
 
 #define DEBUG_SUBSYSTEM S_SEC
 
-#include "../../include/linux/libcfs/libcfs.h"
+#include <linux/libcfs/libcfs.h>
 #include <linux/crypto.h>
 
-#include "../include/obd.h"
-#include "../include/obd_class.h"
-#include "../include/obd_support.h"
-#include "../include/lustre_net.h"
-#include "../include/lustre_import.h"
-#include "../include/lustre_dlm.h"
-#include "../include/lustre_sec.h"
+#include <obd.h>
+#include <obd_class.h>
+#include <obd_support.h>
+#include <lustre_net.h>
+#include <lustre_import.h>
+#include <lustre_dlm.h>
+#include <lustre_sec.h>
 
 #include "ptlrpc_internal.h"
 
@@ -82,7 +79,7 @@ static int sptlrpc_info_lprocfs_seq_show(struct seq_file *seq, void *v)
 
 	if (cli->cl_import)
 		sec = sptlrpc_import_sec_ref(cli->cl_import);
-	if (sec == NULL)
+	if (!sec)
 		goto out;
 
 	sec_flags2str(sec->ps_flvr.sf_flags, str, sizeof(str));
@@ -121,7 +118,7 @@ static int sptlrpc_ctxs_lprocfs_seq_show(struct seq_file *seq, void *v)
 
 	if (cli->cl_import)
 		sec = sptlrpc_import_sec_ref(cli->cl_import);
-	if (sec == NULL)
+	if (!sec)
 		goto out;
 
 	if (sec->ps_policy->sp_cops->display)
@@ -178,7 +175,7 @@ int sptlrpc_lproc_init(void)
 {
 	int rc;
 
-	LASSERT(sptlrpc_debugfs_dir == NULL);
+	LASSERT(!sptlrpc_debugfs_dir);
 
 	sptlrpc_debugfs_dir = ldebugfs_register("sptlrpc", debugfs_lustre_root,
 						sptlrpc_lprocfs_vars, NULL);

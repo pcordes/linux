@@ -300,9 +300,9 @@ static int chip_cmd(struct CHIPSTATE *chip, char *name, audiocmd *cmd)
  *   if available, ...
  */
 
-static void chip_thread_wake(unsigned long data)
+static void chip_thread_wake(struct timer_list *t)
 {
-	struct CHIPSTATE *chip = (struct CHIPSTATE*)data;
+	struct CHIPSTATE *chip = from_timer(chip, t, wt);
 	wake_up_process(chip->thread);
 }
 
@@ -1855,13 +1855,6 @@ static const struct v4l2_ctrl_ops tvaudio_ctrl_ops = {
 
 static const struct v4l2_subdev_core_ops tvaudio_core_ops = {
 	.log_status = tvaudio_log_status,
-	.g_ext_ctrls = v4l2_subdev_g_ext_ctrls,
-	.try_ext_ctrls = v4l2_subdev_try_ext_ctrls,
-	.s_ext_ctrls = v4l2_subdev_s_ext_ctrls,
-	.g_ctrl = v4l2_subdev_g_ctrl,
-	.s_ctrl = v4l2_subdev_s_ctrl,
-	.queryctrl = v4l2_subdev_queryctrl,
-	.querymenu = v4l2_subdev_querymenu,
 };
 
 static const struct v4l2_subdev_tuner_ops tvaudio_tuner_ops = {
@@ -1901,8 +1894,9 @@ static int tvaudio_probe(struct i2c_client *client, const struct i2c_device_id *
 		printk(KERN_INFO "tvaudio: TV audio decoder + audio/video mux driver\n");
 		printk(KERN_INFO "tvaudio: known chips: ");
 		for (desc = chiplist; desc->name != NULL; desc++)
-			printk("%s%s", (desc == chiplist) ? "" : ", ", desc->name);
-		printk("\n");
+			printk(KERN_CONT "%s%s",
+			       (desc == chiplist) ? "" : ", ", desc->name);
+		printk(KERN_CONT "\n");
 	}
 
 	chip = devm_kzalloc(&client->dev, sizeof(*chip), GFP_KERNEL);
@@ -2001,7 +1995,7 @@ static int tvaudio_probe(struct i2c_client *client, const struct i2c_device_id *
 	v4l2_ctrl_handler_setup(&chip->hdl);
 
 	chip->thread = NULL;
-	init_timer(&chip->wt);
+	timer_setup(&chip->wt, chip_thread_wake, 0);
 	if (desc->flags & CHIP_NEED_CHECKMODE) {
 		if (!desc->getrxsubchans || !desc->setaudmode) {
 			/* This shouldn't be happen. Warn user, but keep working
@@ -2011,8 +2005,6 @@ static int tvaudio_probe(struct i2c_client *client, const struct i2c_device_id *
 			return 0;
 		}
 		/* start async thread */
-		chip->wt.function = chip_thread_wake;
-		chip->wt.data     = (unsigned long)chip;
 		chip->thread = kthread_run(chip_thread, chip, "%s",
 					   client->name);
 		if (IS_ERR(chip->thread)) {

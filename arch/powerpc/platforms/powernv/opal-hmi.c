@@ -1,5 +1,5 @@
 /*
- * OPAL hypervisor Maintenance interrupt handling support in PowreNV.
+ * OPAL hypervisor Maintenance interrupt handling support in PowerNV.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -29,6 +29,8 @@
 #include <asm/opal.h>
 #include <asm/cputable.h>
 #include <asm/machdep.h>
+
+#include "powernv.h"
 
 static int opal_hmi_handler_nb_init;
 struct OpalHmiEvtNode {
@@ -150,15 +152,17 @@ static void print_nx_checkstop_reason(const char *level,
 static void print_checkstop_reason(const char *level,
 					struct OpalHMIEvent *hmi_evt)
 {
-	switch (hmi_evt->u.xstop_error.xstop_type) {
+	uint8_t type = hmi_evt->u.xstop_error.xstop_type;
+	switch (type) {
 	case CHECKSTOP_TYPE_CORE:
 		print_core_checkstop_reason(level, hmi_evt);
 		break;
 	case CHECKSTOP_TYPE_NX:
 		print_nx_checkstop_reason(level, hmi_evt);
 		break;
-	case CHECKSTOP_TYPE_UNKNOWN:
-		printk("%s	Unknown Malfunction Alert.\n", level);
+	default:
+		printk("%s	Unknown Malfunction Alert of type %d\n",
+		       level, type);
 		break;
 	}
 }
@@ -178,7 +182,8 @@ static void print_hmi_event_info(struct OpalHMIEvent *hmi_evt)
 		"An XSCOM operation completed",
 		"SCOM has set a reserved FIR bit to cause recovery",
 		"Debug trigger has set a reserved FIR bit to cause recovery",
-		"A hypervisor resource error occurred"
+		"A hypervisor resource error occurred",
+		"CAPP recovery process is in progress",
 	};
 
 	/* Print things out */
@@ -264,8 +269,6 @@ static void hmi_event_handler(struct work_struct *work)
 	spin_unlock_irqrestore(&opal_hmi_evt_lock, flags);
 
 	if (unrecoverable) {
-		int ret;
-
 		/* Pull all HMI events from OPAL before we panic. */
 		while (opal_get_msg(__pa(&msg), sizeof(msg)) == OPAL_SUCCESS) {
 			u32 type;
@@ -281,23 +284,7 @@ static void hmi_event_handler(struct work_struct *work)
 			print_hmi_event_info(hmi_evt);
 		}
 
-		/*
-		 * Unrecoverable HMI exception. We need to inform BMC/OCC
-		 * about this error so that it can collect relevant data
-		 * for error analysis before rebooting.
-		 */
-		ret = opal_cec_reboot2(OPAL_REBOOT_PLATFORM_ERROR,
-			"Unrecoverable HMI exception");
-		if (ret == OPAL_UNSUPPORTED) {
-			pr_emerg("Reboot type %d not supported\n",
-						OPAL_REBOOT_PLATFORM_ERROR);
-		}
-
-		/*
-		 * Fall through and panic if opal_cec_reboot2() returns
-		 * OPAL_UNSUPPORTED.
-		 */
-		panic("Unrecoverable HMI exception");
+		pnv_platform_error_reboot(NULL, "Unrecoverable HMI exception");
 	}
 }
 

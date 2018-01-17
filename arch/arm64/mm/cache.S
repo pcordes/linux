@@ -23,8 +23,7 @@
 #include <asm/assembler.h>
 #include <asm/cpufeature.h>
 #include <asm/alternative.h>
-
-#include "proc-macros.S"
+#include <asm/asm-uaccess.h>
 
 /*
  *	flush_icache_range(start,end)
@@ -50,11 +49,12 @@ ENTRY(flush_icache_range)
  *	- end     - virtual end address of region
  */
 ENTRY(__flush_cache_user_range)
+	uaccess_ttbr0_enable x2, x3
 	dcache_line_size x2, x3
 	sub	x3, x2, #1
 	bic	x4, x0, x3
 1:
-USER(9f, dc	cvau, x4	)		// clean D line to PoU
+user_alt 9f, "dc cvau, x4",  "dc civac, x4",  ARM64_WORKAROUND_CLEAN_CACHE
 	add	x4, x4, x2
 	cmp	x4, x1
 	b.lo	1b
@@ -71,10 +71,12 @@ USER(9f, ic	ivau, x4	)		// invalidate I line PoU
 	dsb	ish
 	isb
 	mov	x0, #0
+1:
+	uaccess_ttbr0_disable x1
 	ret
 9:
 	mov	x0, #-EFAULT
-	ret
+	b	1b
 ENDPROC(flush_icache_range)
 ENDPROC(__flush_cache_user_range)
 
@@ -107,19 +109,25 @@ ENTRY(__clean_dcache_area_pou)
 ENDPROC(__clean_dcache_area_pou)
 
 /*
- *	__inval_cache_range(start, end)
- *	- start   - start address of region
- *	- end     - end address of region
+ *	__inval_dcache_area(kaddr, size)
+ *
+ * 	Ensure that any D-cache lines for the interval [kaddr, kaddr+size)
+ * 	are invalidated. Any partial lines at the ends of the interval are
+ *	also cleaned to PoC to prevent data loss.
+ *
+ *	- kaddr   - kernel address
+ *	- size    - size in question
  */
-ENTRY(__inval_cache_range)
+ENTRY(__inval_dcache_area)
 	/* FALLTHROUGH */
 
 /*
- *	__dma_inv_range(start, end)
+ *	__dma_inv_area(start, size)
  *	- start   - virtual start address of region
- *	- end     - virtual end address of region
+ *	- size    - size in question
  */
-__dma_inv_range:
+__dma_inv_area:
+	add	x1, x1, x0
 	dcache_line_size x2, x3
 	sub	x3, x2, #1
 	tst	x1, x3				// end cache line aligned?
@@ -137,47 +145,58 @@ __dma_inv_range:
 	b.lo	2b
 	dsb	sy
 	ret
-ENDPIPROC(__inval_cache_range)
-ENDPROC(__dma_inv_range)
+ENDPIPROC(__inval_dcache_area)
+ENDPROC(__dma_inv_area)
 
 /*
- *	__dma_clean_range(start, end)
- *	- start   - virtual start address of region
- *	- end     - virtual end address of region
+ *	__clean_dcache_area_poc(kaddr, size)
+ *
+ * 	Ensure that any D-cache lines for the interval [kaddr, kaddr+size)
+ * 	are cleaned to the PoC.
+ *
+ *	- kaddr   - kernel address
+ *	- size    - size in question
  */
-__dma_clean_range:
-	dcache_line_size x2, x3
-	sub	x3, x2, #1
-	bic	x0, x0, x3
-1:
-alternative_if_not ARM64_WORKAROUND_CLEAN_CACHE
-	dc	cvac, x0
-alternative_else
-	dc	civac, x0
-alternative_endif
-	add	x0, x0, x2
-	cmp	x0, x1
-	b.lo	1b
-	dsb	sy
-	ret
-ENDPROC(__dma_clean_range)
+ENTRY(__clean_dcache_area_poc)
+	/* FALLTHROUGH */
 
 /*
- *	__dma_flush_range(start, end)
+ *	__dma_clean_area(start, size)
  *	- start   - virtual start address of region
- *	- end     - virtual end address of region
+ *	- size    - size in question
  */
-ENTRY(__dma_flush_range)
-	dcache_line_size x2, x3
-	sub	x3, x2, #1
-	bic	x0, x0, x3
-1:	dc	civac, x0			// clean & invalidate D / U line
-	add	x0, x0, x2
-	cmp	x0, x1
-	b.lo	1b
-	dsb	sy
+__dma_clean_area:
+	dcache_by_line_op cvac, sy, x0, x1, x2, x3
 	ret
-ENDPIPROC(__dma_flush_range)
+ENDPIPROC(__clean_dcache_area_poc)
+ENDPROC(__dma_clean_area)
+
+/*
+ *	__clean_dcache_area_pop(kaddr, size)
+ *
+ * 	Ensure that any D-cache lines for the interval [kaddr, kaddr+size)
+ * 	are cleaned to the PoP.
+ *
+ *	- kaddr   - kernel address
+ *	- size    - size in question
+ */
+ENTRY(__clean_dcache_area_pop)
+	dcache_by_line_op cvap, sy, x0, x1, x2, x3
+	ret
+ENDPIPROC(__clean_dcache_area_pop)
+
+/*
+ *	__dma_flush_area(start, size)
+ *
+ *	clean & invalidate D / U line
+ *
+ *	- start   - virtual start address of region
+ *	- size    - size in question
+ */
+ENTRY(__dma_flush_area)
+	dcache_by_line_op civac, sy, x0, x1, x2, x3
+	ret
+ENDPIPROC(__dma_flush_area)
 
 /*
  *	__dma_map_area(start, size, dir)
@@ -186,10 +205,9 @@ ENDPIPROC(__dma_flush_range)
  *	- dir	- DMA direction
  */
 ENTRY(__dma_map_area)
-	add	x1, x1, x0
 	cmp	w2, #DMA_FROM_DEVICE
-	b.eq	__dma_inv_range
-	b	__dma_clean_range
+	b.eq	__dma_inv_area
+	b	__dma_clean_area
 ENDPIPROC(__dma_map_area)
 
 /*
@@ -199,8 +217,7 @@ ENDPIPROC(__dma_map_area)
  *	- dir	- DMA direction
  */
 ENTRY(__dma_unmap_area)
-	add	x1, x1, x0
 	cmp	w2, #DMA_TO_DEVICE
-	b.ne	__dma_inv_range
+	b.ne	__dma_inv_area
 	ret
 ENDPIPROC(__dma_unmap_area)

@@ -78,6 +78,16 @@ static struct mwifiex_debug_data items[] = {
 	 item_addr(last_event), DBG_CMD_NUM},
 	{"last_event_index", item_size(last_event_index),
 	 item_addr(last_event_index), 1},
+	{"last_mp_wr_bitmap", item_size(last_mp_wr_bitmap),
+	 item_addr(last_mp_wr_bitmap), MWIFIEX_DBG_SDIO_MP_NUM},
+	{"last_mp_wr_ports", item_size(last_mp_wr_ports),
+	 item_addr(last_mp_wr_ports), MWIFIEX_DBG_SDIO_MP_NUM},
+	{"last_mp_wr_len", item_size(last_mp_wr_len),
+	 item_addr(last_mp_wr_len), MWIFIEX_DBG_SDIO_MP_NUM},
+	{"last_mp_curr_wr_port", item_size(last_mp_curr_wr_port),
+	 item_addr(last_mp_curr_wr_port), MWIFIEX_DBG_SDIO_MP_NUM},
+	{"last_sdio_mp_index", item_size(last_sdio_mp_index),
+	 item_addr(last_sdio_mp_index), 1},
 	{"num_cmd_h2c_fail", item_size(num_cmd_host_to_card_failure),
 	 item_addr(num_cmd_host_to_card_failure), 1},
 	{"num_cmd_sleep_cfm_fail",
@@ -130,21 +140,6 @@ int mwifiex_init_fw_complete(struct mwifiex_adapter *adapter)
 		if (adapter->if_ops.init_fw_port)
 			adapter->if_ops.init_fw_port(adapter);
 
-	adapter->init_wait_q_woken = true;
-	wake_up_interruptible(&adapter->init_wait_q);
-	return 0;
-}
-
-/*
- * Firmware shutdown complete callback handler.
- *
- * This function sets the hardware status to not ready and wakes up
- * the function waiting on the init wait queue for the firmware
- * shutdown to complete.
- */
-int mwifiex_shutdown_fw_complete(struct mwifiex_adapter *adapter)
-{
-	adapter->hw_status = MWIFIEX_HW_STATUS_NOT_READY;
 	adapter->init_wait_q_woken = true;
 	wake_up_interruptible(&adapter->init_wait_q);
 	return 0;
@@ -233,6 +228,16 @@ int mwifiex_get_debug_info(struct mwifiex_private *priv,
 		memcpy(info->last_event, adapter->dbg.last_event,
 		       sizeof(adapter->dbg.last_event));
 		info->last_event_index = adapter->dbg.last_event_index;
+		memcpy(info->last_mp_wr_bitmap, adapter->dbg.last_mp_wr_bitmap,
+		       sizeof(adapter->dbg.last_mp_wr_bitmap));
+		memcpy(info->last_mp_wr_ports, adapter->dbg.last_mp_wr_ports,
+		       sizeof(adapter->dbg.last_mp_wr_ports));
+		memcpy(info->last_mp_curr_wr_port,
+		       adapter->dbg.last_mp_curr_wr_port,
+		       sizeof(adapter->dbg.last_mp_curr_wr_port));
+		memcpy(info->last_mp_wr_len, adapter->dbg.last_mp_wr_len,
+		       sizeof(adapter->dbg.last_mp_wr_len));
+		info->last_sdio_mp_index = adapter->dbg.last_sdio_mp_index;
 		info->data_sent = adapter->data_sent;
 		info->cmd_sent = adapter->cmd_sent;
 		info->cmd_resp_received = adapter->cmd_resp_received;
@@ -269,13 +274,13 @@ int mwifiex_debug_info_to_buffer(struct mwifiex_private *priv, char *buf,
 				val = *((u8 *)addr);
 				break;
 			case 2:
-				val = *((u16 *)addr);
+				val = get_unaligned((u16 *)addr);
 				break;
 			case 4:
-				val = *((u32 *)addr);
+				val = get_unaligned((u32 *)addr);
 				break;
 			case 8:
-				val = *((long long *)addr);
+				val = get_unaligned((long long *)addr);
 				break;
 			default:
 				val = -1;
@@ -366,6 +371,7 @@ mwifiex_parse_mgmt_packet(struct mwifiex_private *priv, u8 *payload, u16 len,
 				    "unknown public action frame category %d\n",
 				    category);
 		}
+		break;
 	default:
 		mwifiex_dbg(priv->adapter, INFO,
 		    "unknown mgmt frame subtype %#x\n", stype);

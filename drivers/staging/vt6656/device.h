@@ -83,7 +83,7 @@
 #define CONFIG_PATH			"/etc/vntconfiguration.dat"
 
 #define MAX_UINTS			8
-#define OPTION_DEFAULT			{ [0 ... MAX_UINTS-1] = -1}
+#define OPTION_DEFAULT			{ [0 ... MAX_UINTS - 1] = -1}
 
 #define DUPLICATE_RX_CACHE_LENGTH       5
 
@@ -259,8 +259,8 @@ enum {
 };
 
 /* flags for options */
-#define DEVICE_FLAGS_UNPLUG		BIT(0)
-#define DEVICE_FLAGS_DISCONNECTED	BIT(1)
+#define DEVICE_FLAGS_UNPLUG		0
+#define DEVICE_FLAGS_DISCONNECTED	1
 
 struct vnt_private {
 	/* mac80211 */

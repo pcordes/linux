@@ -1,19 +1,6 @@
+// SPDX-License-Identifier: GPL-2.0+
 /*
  *  Kernel Probes (KProbes)
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA 02111-1307, USA.
  *
  * Copyright IBM Corp. 2002, 2006
  *
@@ -26,12 +13,14 @@
 #include <linux/stop_machine.h>
 #include <linux/kdebug.h>
 #include <linux/uaccess.h>
+#include <linux/extable.h>
 #include <linux/module.h>
 #include <linux/slab.h>
 #include <linux/hardirq.h>
 #include <linux/ftrace.h>
-#include <asm/cacheflush.h>
+#include <asm/set_memory.h>
 #include <asm/sections.h>
+#include <linux/uaccess.h>
 #include <asm/dis.h>
 
 DEFINE_PER_CPU(struct kprobe *, current_kprobe);
@@ -43,11 +32,17 @@ DEFINE_INSN_CACHE_OPS(dmainsn);
 
 static void *alloc_dmainsn_page(void)
 {
-	return (void *)__get_free_page(GFP_KERNEL | GFP_DMA);
+	void *page;
+
+	page = (void *) __get_free_page(GFP_KERNEL | GFP_DMA);
+	if (page)
+		set_memory_x((unsigned long) page, 1);
+	return page;
 }
 
 static void free_dmainsn_page(void *page)
 {
+	set_memory_nx((unsigned long) page, 1);
 	free_page((unsigned long)page);
 }
 
@@ -153,8 +148,6 @@ struct swap_insn_args {
 
 static int swap_instruction(void *data)
 {
-	struct kprobe_ctlblk *kcb = get_kprobe_ctlblk();
-	unsigned long status = kcb->kprobe_status;
 	struct swap_insn_args *args = data;
 	struct ftrace_insn new_insn, *insn;
 	struct kprobe *p = args->p;
@@ -177,9 +170,7 @@ static int swap_instruction(void *data)
 			ftrace_generate_nop_insn(&new_insn);
 	}
 skip_ftrace:
-	kcb->kprobe_status = KPROBE_SWAP_INST;
 	s390_kernel_write(p->addr, &new_insn, len);
-	kcb->kprobe_status = status;
 	return 0;
 }
 NOKPROBE_SYMBOL(swap_instruction);
@@ -188,7 +179,7 @@ void arch_arm_kprobe(struct kprobe *p)
 {
 	struct swap_insn_args args = {.p = p, .arm_kprobe = 1};
 
-	stop_machine(swap_instruction, &args, NULL);
+	stop_machine_cpuslocked(swap_instruction, &args, NULL);
 }
 NOKPROBE_SYMBOL(arch_arm_kprobe);
 
@@ -196,7 +187,7 @@ void arch_disarm_kprobe(struct kprobe *p)
 {
 	struct swap_insn_args args = {.p = p, .arm_kprobe = 0};
 
-	stop_machine(swap_instruction, &args, NULL);
+	stop_machine_cpuslocked(swap_instruction, &args, NULL);
 }
 NOKPROBE_SYMBOL(arch_disarm_kprobe);
 
@@ -566,9 +557,6 @@ static int kprobe_trap_handler(struct pt_regs *regs, int trapnr)
 	const struct exception_table_entry *entry;
 
 	switch(kcb->kprobe_status) {
-	case KPROBE_SWAP_INST:
-		/* We are here because the instruction replacement failed */
-		return 0;
 	case KPROBE_HIT_SS:
 	case KPROBE_REENTER:
 		/*
@@ -690,6 +678,15 @@ int setjmp_pre_handler(struct kprobe *p, struct pt_regs *regs)
 	stack = (unsigned long) regs->gprs[15];
 
 	memcpy(kcb->jprobes_stack, (void *) stack, MIN_STACK_SIZE(stack));
+
+	/*
+	 * jprobes use jprobe_return() which skips the normal return
+	 * path of the function, and this messes up the accounting of the
+	 * function graph tracer to get messed up.
+	 *
+	 * Pause function graph tracing while performing the jprobe function.
+	 */
+	pause_graph_tracing();
 	return 1;
 }
 NOKPROBE_SYMBOL(setjmp_pre_handler);
@@ -704,6 +701,9 @@ int longjmp_break_handler(struct kprobe *p, struct pt_regs *regs)
 {
 	struct kprobe_ctlblk *kcb = get_kprobe_ctlblk();
 	unsigned long stack;
+
+	/* It's OK to start function graph tracing again */
+	unpause_graph_tracing();
 
 	stack = (unsigned long) kcb->jprobe_saved_regs.gprs[15];
 

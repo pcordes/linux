@@ -69,15 +69,13 @@ static irqreturn_t
 nvkm_pci_intr(int irq, void *arg)
 {
 	struct nvkm_pci *pci = arg;
-	struct nvkm_mc *mc = pci->subdev.device->mc;
+	struct nvkm_device *device = pci->subdev.device;
 	bool handled = false;
-	if (likely(mc)) {
-		nvkm_mc_intr_unarm(mc);
-		if (pci->msi)
-			pci->func->msi_rearm(pci);
-		nvkm_mc_intr(mc, &handled);
-		nvkm_mc_intr_rearm(mc);
-	}
+	nvkm_mc_intr_unarm(device);
+	if (pci->msi)
+		pci->func->msi_rearm(pci);
+	nvkm_mc_intr(device, &handled);
+	nvkm_mc_intr_rearm(device);
 	return handled ? IRQ_HANDLED : IRQ_NONE;
 }
 
@@ -89,7 +87,7 @@ nvkm_pci_fini(struct nvkm_subdev *subdev, bool suspend)
 	if (pci->irq >= 0) {
 		free_irq(pci->irq, pci);
 		pci->irq = -1;
-	};
+	}
 
 	if (pci->agp.bridge)
 		nvkm_agp_fini(pci);
@@ -138,6 +136,13 @@ nvkm_pci_init(struct nvkm_subdev *subdev)
 		return ret;
 
 	pci->irq = pdev->irq;
+
+	/* Ensure MSI interrupts are armed, for the case where there are
+	 * already interrupts pending (for whatever reason) at load time.
+	 */
+	if (pci->msi)
+		pci->func->msi_rearm(pci);
+
 	return ret;
 }
 
@@ -168,7 +173,7 @@ nvkm_pci_new_(const struct nvkm_pci_func *func, struct nvkm_device *device,
 
 	if (!(pci = *ppci = kzalloc(sizeof(**ppci), GFP_KERNEL)))
 		return -ENOMEM;
-	nvkm_subdev_ctor(&nvkm_pci_func, device, index, 0, &pci->subdev);
+	nvkm_subdev_ctor(&nvkm_pci_func, device, index, &pci->subdev);
 	pci->func = func;
 	pci->pdev = device->func->pci(device)->pdev;
 	pci->irq = -1;
@@ -193,6 +198,10 @@ nvkm_pci_new_(const struct nvkm_pci_func *func, struct nvkm_device *device,
 			break;
 		}
 	}
+
+#ifdef __BIG_ENDIAN
+	pci->msi = false;
+#endif
 
 	pci->msi = nvkm_boolopt(device->cfgopt, "NvMSI", pci->msi);
 	if (pci->msi && func->msi_rearm) {

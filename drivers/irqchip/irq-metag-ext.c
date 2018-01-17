@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0
 /*
  * Meta External interrupt code.
  *
@@ -436,7 +437,6 @@ static int meta_intc_irq_set_type(struct irq_data *data, unsigned int flow_type)
 
 /**
  * meta_intc_irq_demux() - external irq de-multiplexer
- * @irq:	the virtual interrupt number
  * @desc:	the interrupt description structure for this irq
  *
  * The cpu receives an interrupt on TR2 when a SoC interrupt has occurred. It is
@@ -519,6 +519,8 @@ static int meta_intc_set_affinity(struct irq_data *data,
 
 	metag_out32(TBI_TRIG_VEC(TBID_SIGNUM_TR2(thread)), vec_addr);
 
+	irq_data_update_effective_affinity(data, cpumask_of(cpu));
+
 	return 0;
 }
 #else
@@ -579,6 +581,8 @@ static int meta_intc_map(struct irq_domain *d, unsigned int irq,
 	else
 		irq_set_chip_and_handler(irq, &meta_intc_edge_chip,
 					 handle_edge_irq);
+
+	irqd_set_single_target(irq_desc_get_irq_data(irq_to_desc(irq)));
 	return 0;
 }
 

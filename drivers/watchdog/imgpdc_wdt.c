@@ -150,7 +150,8 @@ static int pdc_wdt_start(struct watchdog_device *wdt_dev)
 	return 0;
 }
 
-static int pdc_wdt_restart(struct watchdog_device *wdt_dev)
+static int pdc_wdt_restart(struct watchdog_device *wdt_dev,
+			   unsigned long action, void *data)
 {
 	struct pdc_wdt_dev *wdt = watchdog_get_drvdata(wdt_dev);
 
@@ -160,7 +161,7 @@ static int pdc_wdt_restart(struct watchdog_device *wdt_dev)
 	return 0;
 }
 
-static struct watchdog_info pdc_wdt_info = {
+static const struct watchdog_info pdc_wdt_info = {
 	.identity	= "IMG PDC Watchdog",
 	.options	= WDIOF_SETTIMEOUT |
 			  WDIOF_KEEPALIVEPING |

@@ -13,21 +13,20 @@
 
 #include <linux/backlight.h>
 #include <linux/delay.h>
-#include <linux/fb.h>
-#include <linux/gpio.h>
+#include <linux/gpio/consumer.h>
 #include <linux/interrupt.h>
 #include <linux/jiffies.h>
 #include <linux/module.h>
 #include <linux/platform_device.h>
-#include <linux/sched.h>
+#include <linux/sched/signal.h>
 #include <linux/slab.h>
 #include <linux/workqueue.h>
 #include <linux/of_device.h>
 #include <linux/of_gpio.h>
 
-#include <video/omapdss.h>
-#include <video/omap-panel-data.h>
 #include <video/mipi_display.h>
+
+#include "../dss/omapdss.h"
 
 /* DSI Virtual channel. Hardcoded for now. */
 #define TCH 0
@@ -43,7 +42,7 @@ struct panel_drv_data {
 	struct omap_dss_device dssdev;
 	struct omap_dss_device *in;
 
-	struct omap_video_timings timings;
+	struct videomode vm;
 
 	struct platform_device *pdev;
 
@@ -380,13 +379,6 @@ static const struct backlight_ops dsicm_bl_ops = {
 	.update_status  = dsicm_bl_update_status,
 };
 
-static void dsicm_get_resolution(struct omap_dss_device *dssdev,
-		u16 *xres, u16 *yres)
-{
-	*xres = dssdev->panel.timings.x_res;
-	*yres = dssdev->panel.timings.y_res;
-}
-
 static ssize_t dsicm_num_errors_show(struct device *dev,
 		struct device_attribute *attr, char *buf)
 {
@@ -562,7 +554,7 @@ static struct attribute *dsicm_attrs[] = {
 	NULL,
 };
 
-static struct attribute_group dsicm_attr_group = {
+static const struct attribute_group dsicm_attr_group = {
 	.attrs = dsicm_attrs,
 };
 
@@ -590,7 +582,7 @@ static int dsicm_power_on(struct panel_drv_data *ddata)
 	struct omap_dss_dsi_config dsi_config = {
 		.mode = OMAP_DSS_DSI_CMD_MODE,
 		.pixel_format = OMAP_DSS_DSI_FMT_RGB888,
-		.timings = &ddata->timings,
+		.vm = &ddata->vm,
 		.hs_clk_min = 150000000,
 		.hs_clk_max = 300000000,
 		.lp_clk_min = 7000000,
@@ -893,8 +885,8 @@ static int dsicm_update(struct omap_dss_device *dssdev,
 
 	/* XXX no need to send this every frame, but dsi break if not done */
 	r = dsicm_set_update_window(ddata, 0, 0,
-			dssdev->panel.timings.x_res,
-			dssdev->panel.timings.y_res);
+			dssdev->panel.vm.hactive,
+			dssdev->panel.vm.vactive);
 	if (r)
 		goto err;
 
@@ -1024,9 +1016,8 @@ static int dsicm_memory_read(struct omap_dss_device *dssdev,
 		goto err1;
 	}
 
-	size = min(w * h * 3,
-			dssdev->panel.timings.x_res *
-			dssdev->panel.timings.y_res * 3);
+	size = min((u32)w * h * 3,
+		   dssdev->panel.vm.hactive * dssdev->panel.vm.vactive * 3);
 
 	in->ops.dsi->bus_lock(in);
 
@@ -1118,48 +1109,11 @@ static struct omap_dss_driver dsicm_ops = {
 	.update		= dsicm_update,
 	.sync		= dsicm_sync,
 
-	.get_resolution	= dsicm_get_resolution,
-	.get_recommended_bpp = omapdss_default_get_recommended_bpp,
-
 	.enable_te	= dsicm_enable_te,
 	.get_te		= dsicm_get_te,
 
 	.memory_read	= dsicm_memory_read,
 };
-
-static int dsicm_probe_pdata(struct platform_device *pdev)
-{
-	const struct panel_dsicm_platform_data *pdata;
-	struct panel_drv_data *ddata = platform_get_drvdata(pdev);
-	struct omap_dss_device *dssdev, *in;
-
-	pdata = dev_get_platdata(&pdev->dev);
-
-	in = omap_dss_find_output(pdata->source);
-	if (in == NULL) {
-		dev_err(&pdev->dev, "failed to find video source\n");
-		return -EPROBE_DEFER;
-	}
-	ddata->in = in;
-
-	ddata->reset_gpio = pdata->reset_gpio;
-
-	if (pdata->use_ext_te)
-		ddata->ext_te_gpio = pdata->ext_te_gpio;
-	else
-		ddata->ext_te_gpio = -1;
-
-	ddata->ulps_timeout = pdata->ulps_timeout;
-
-	ddata->use_dsi_backlight = pdata->use_dsi_backlight;
-
-	ddata->pin_config = pdata->pin_config;
-
-	dssdev = &ddata->dssdev;
-	dssdev->name = pdata->name;
-
-	return 0;
-}
 
 static int dsicm_probe_of(struct platform_device *pdev)
 {
@@ -1214,26 +1168,21 @@ static int dsicm_probe(struct platform_device *pdev)
 	platform_set_drvdata(pdev, ddata);
 	ddata->pdev = pdev;
 
-	if (dev_get_platdata(dev)) {
-		r = dsicm_probe_pdata(pdev);
-		if (r)
-			return r;
-	} else if (pdev->dev.of_node) {
-		r = dsicm_probe_of(pdev);
-		if (r)
-			return r;
-	} else {
+	if (!pdev->dev.of_node)
 		return -ENODEV;
-	}
 
-	ddata->timings.x_res = 864;
-	ddata->timings.y_res = 480;
-	ddata->timings.pixelclock = 864 * 480 * 60;
+	r = dsicm_probe_of(pdev);
+	if (r)
+		return r;
+
+	ddata->vm.hactive = 864;
+	ddata->vm.vactive = 480;
+	ddata->vm.pixelclock = 864 * 480 * 60;
 
 	dssdev = &ddata->dssdev;
 	dssdev->dev = dev;
 	dssdev->driver = &dsicm_ops;
-	dssdev->panel.timings = ddata->timings;
+	dssdev->panel.vm = ddata->vm;
 	dssdev->type = OMAP_DISPLAY_TYPE_DSI;
 	dssdev->owner = THIS_MODULE;
 
@@ -1294,7 +1243,7 @@ static int dsicm_probe(struct platform_device *pdev)
 	dsicm_hw_reset(ddata);
 
 	if (ddata->use_dsi_backlight) {
-		memset(&props, 0, sizeof(struct backlight_properties));
+		memset(&props, 0, sizeof(props));
 		props.max_brightness = 255;
 
 		props.type = BACKLIGHT_RAW;
@@ -1323,8 +1272,7 @@ static int dsicm_probe(struct platform_device *pdev)
 	return 0;
 
 err_sysfs_create:
-	if (bldev != NULL)
-		backlight_device_unregister(bldev);
+	backlight_device_unregister(bldev);
 err_bl:
 	destroy_workqueue(ddata->workqueue);
 err_reg:

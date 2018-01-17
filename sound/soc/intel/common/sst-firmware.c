@@ -19,6 +19,7 @@
 #include <linux/sched.h>
 #include <linux/firmware.h>
 #include <linux/export.h>
+#include <linux/module.h>
 #include <linux/platform_device.h>
 #include <linux/dma-mapping.h>
 #include <linux/dmaengine.h>
@@ -203,7 +204,7 @@ static struct dw_dma_chip *dw_probe(struct device *dev, struct resource *mem,
 
 	chip->dev = dev;
 
-	err = dw_dma_probe(chip, NULL);
+	err = dw_dma_probe(chip);
 	if (err)
 		return ERR_PTR(err);
 
@@ -274,7 +275,6 @@ int sst_dma_new(struct sst_dsp *sst)
 	struct sst_pdata *sst_pdata = sst->pdata;
 	struct sst_dma *dma;
 	struct resource mem;
-	const char *dma_dev_name;
 	int ret = 0;
 
 	if (sst->pdata->resindex_dma_base == -1)
@@ -285,7 +285,6 @@ int sst_dma_new(struct sst_dsp *sst)
 	* is attached to the ADSP IP. */
 	switch (sst->pdata->dma_engine) {
 	case SST_DMA_TYPE_DW:
-		dma_dev_name = "dw_dmac";
 		break;
 	default:
 		dev_err(sst->dev, "error: invalid DMA engine %d\n",
@@ -1211,3 +1210,71 @@ u32 sst_dsp_get_offset(struct sst_dsp *dsp, u32 offset,
 	}
 }
 EXPORT_SYMBOL_GPL(sst_dsp_get_offset);
+
+struct sst_dsp *sst_dsp_new(struct device *dev,
+	struct sst_dsp_device *sst_dev, struct sst_pdata *pdata)
+{
+	struct sst_dsp *sst;
+	int err;
+
+	dev_dbg(dev, "initialising audio DSP id 0x%x\n", pdata->id);
+
+	sst = devm_kzalloc(dev, sizeof(*sst), GFP_KERNEL);
+	if (sst == NULL)
+		return NULL;
+
+	spin_lock_init(&sst->spinlock);
+	mutex_init(&sst->mutex);
+	sst->dev = dev;
+	sst->dma_dev = pdata->dma_dev;
+	sst->thread_context = sst_dev->thread_context;
+	sst->sst_dev = sst_dev;
+	sst->id = pdata->id;
+	sst->irq = pdata->irq;
+	sst->ops = sst_dev->ops;
+	sst->pdata = pdata;
+	INIT_LIST_HEAD(&sst->used_block_list);
+	INIT_LIST_HEAD(&sst->free_block_list);
+	INIT_LIST_HEAD(&sst->module_list);
+	INIT_LIST_HEAD(&sst->fw_list);
+	INIT_LIST_HEAD(&sst->scratch_block_list);
+
+	/* Initialise SST Audio DSP */
+	if (sst->ops->init) {
+		err = sst->ops->init(sst, pdata);
+		if (err < 0)
+			return NULL;
+	}
+
+	/* Register the ISR */
+	err = request_threaded_irq(sst->irq, sst->ops->irq_handler,
+		sst_dev->thread, IRQF_SHARED, "AudioDSP", sst);
+	if (err)
+		goto irq_err;
+
+	err = sst_dma_new(sst);
+	if (err)
+		dev_warn(dev, "sst_dma_new failed %d\n", err);
+
+	return sst;
+
+irq_err:
+	if (sst->ops->free)
+		sst->ops->free(sst);
+
+	return NULL;
+}
+EXPORT_SYMBOL_GPL(sst_dsp_new);
+
+void sst_dsp_free(struct sst_dsp *sst)
+{
+	free_irq(sst->irq, sst);
+	if (sst->ops->free)
+		sst->ops->free(sst);
+
+	sst_dma_free(sst->dma);
+}
+EXPORT_SYMBOL_GPL(sst_dsp_free);
+
+MODULE_DESCRIPTION("Intel SST Firmware Loader");
+MODULE_LICENSE("GPL v2");

@@ -38,12 +38,13 @@
 #include <linux/gpio.h>
 #include <linux/regulator/consumer.h>
 #include <linux/component.h>
-#include <video/omapdss.h>
+#include <linux/of.h>
+#include <linux/of_graph.h>
 #include <sound/omap-hdmi-audio.h>
 
+#include "omapdss.h"
 #include "hdmi5_core.h"
 #include "dss.h"
-#include "dss_features.h"
 
 static struct omap_hdmi hdmi;
 
@@ -119,7 +120,6 @@ static irqreturn_t hdmi_irq_handler(int irq, void *data)
 
 static int hdmi_init_regulator(void)
 {
-	int r;
 	struct regulator *reg;
 
 	if (hdmi.vdda_reg != NULL)
@@ -129,15 +129,6 @@ static int hdmi_init_regulator(void)
 	if (IS_ERR(reg)) {
 		DSSERR("can't get VDDA regulator\n");
 		return PTR_ERR(reg);
-	}
-
-	if (regulator_can_change_voltage(reg)) {
-		r = regulator_set_voltage(reg, 1800000, 1800000);
-		if (r) {
-			devm_regulator_put(reg);
-			DSSWARN("can't set the regulator voltage\n");
-			return r;
-		}
 	}
 
 	hdmi.vdda_reg = reg;
@@ -181,19 +172,29 @@ static void hdmi_power_off_core(struct omap_dss_device *dssdev)
 static int hdmi_power_on_full(struct omap_dss_device *dssdev)
 {
 	int r;
-	struct omap_video_timings *p;
-	struct omap_overlay_manager *mgr = hdmi.output.manager;
+	struct videomode *vm;
+	enum omap_channel channel = dssdev->dispc_channel;
 	struct dss_pll_clock_info hdmi_cinfo = { 0 };
+	unsigned pc;
 
 	r = hdmi_power_on_core(dssdev);
 	if (r)
 		return r;
 
-	p = &hdmi.cfg.timings;
+	vm = &hdmi.cfg.vm;
 
-	DSSDBG("hdmi_power_on x_res= %d y_res = %d\n", p->x_res, p->y_res);
+	DSSDBG("hdmi_power_on hactive= %d vactive = %d\n", vm->hactive,
+	       vm->vactive);
 
-	hdmi_pll_compute(&hdmi.pll, p->pixelclock, &hdmi_cinfo);
+	pc = vm->pixelclock;
+	if (vm->flags & DISPLAY_FLAGS_DOUBLECLK)
+		pc *= 2;
+
+	/* DSS_HDMI_TCLK is bitclk / 10 */
+	pc *= 10;
+
+	dss_pll_calc_b(&hdmi.pll.pll, clk_get_rate(hdmi.pll.pll.clkin),
+		pc, &hdmi_cinfo);
 
 	/* disable and clear irqs */
 	hdmi_wp_clear_irqenable(&hdmi.wp, 0xffffffff);
@@ -225,28 +226,25 @@ static int hdmi_power_on_full(struct omap_dss_device *dssdev)
 
 	hdmi5_configure(&hdmi.core, &hdmi.wp, &hdmi.cfg);
 
-	/* bypass TV gamma table */
-	dispc_enable_gamma_table(0);
-
 	/* tv size */
-	dss_mgr_set_timings(mgr, p);
+	dss_mgr_set_timings(channel, vm);
+
+	r = dss_mgr_enable(channel);
+	if (r)
+		goto err_mgr_enable;
 
 	r = hdmi_wp_video_start(&hdmi.wp);
 	if (r)
 		goto err_vid_enable;
-
-	r = dss_mgr_enable(mgr);
-	if (r)
-		goto err_mgr_enable;
 
 	hdmi_wp_set_irqenable(&hdmi.wp,
 			HDMI_IRQ_LINK_CONNECT | HDMI_IRQ_LINK_DISCONNECT);
 
 	return 0;
 
-err_mgr_enable:
-	hdmi_wp_video_stop(&hdmi.wp);
 err_vid_enable:
+	dss_mgr_disable(channel);
+err_mgr_enable:
 	hdmi_wp_set_phy_pwr(&hdmi.wp, HDMI_PHYPWRCMD_OFF);
 err_phy_pwr:
 err_phy_cfg:
@@ -259,13 +257,13 @@ err_pll_enable:
 
 static void hdmi_power_off_full(struct omap_dss_device *dssdev)
 {
-	struct omap_overlay_manager *mgr = hdmi.output.manager;
+	enum omap_channel channel = dssdev->dispc_channel;
 
 	hdmi_wp_clear_irqenable(&hdmi.wp, 0xffffffff);
 
-	dss_mgr_disable(mgr);
-
 	hdmi_wp_video_stop(&hdmi.wp);
+
+	dss_mgr_disable(channel);
 
 	hdmi_wp_set_phy_pwr(&hdmi.wp, HDMI_PHYPWRCMD_OFF);
 
@@ -275,36 +273,30 @@ static void hdmi_power_off_full(struct omap_dss_device *dssdev)
 }
 
 static int hdmi_display_check_timing(struct omap_dss_device *dssdev,
-					struct omap_video_timings *timings)
+				     struct videomode *vm)
 {
-	struct omap_dss_device *out = &hdmi.output;
-
-	/* TODO: proper interlace support */
-	if (timings->interlace)
-		return -EINVAL;
-
-	if (!dispc_mgr_timings_ok(out->dispc_channel, timings))
+	if (!dispc_mgr_timings_ok(dssdev->dispc_channel, vm))
 		return -EINVAL;
 
 	return 0;
 }
 
 static void hdmi_display_set_timing(struct omap_dss_device *dssdev,
-		struct omap_video_timings *timings)
+				    struct videomode *vm)
 {
 	mutex_lock(&hdmi.lock);
 
-	hdmi.cfg.timings = *timings;
+	hdmi.cfg.vm = *vm;
 
-	dispc_set_tv_pclk(timings->pixelclock);
+	dispc_set_tv_pclk(vm->pixelclock);
 
 	mutex_unlock(&hdmi.lock);
 }
 
 static void hdmi_display_get_timings(struct omap_dss_device *dssdev,
-		struct omap_video_timings *timings)
+				     struct videomode *vm)
 {
-	*timings = hdmi.cfg.timings;
+	*vm = hdmi.cfg.vm;
 }
 
 static void hdmi_dump_regs(struct seq_file *s)
@@ -373,7 +365,7 @@ static int hdmi_display_enable(struct omap_dss_device *dssdev)
 
 	mutex_lock(&hdmi.lock);
 
-	if (out->manager == NULL) {
+	if (!out->dispc_channel_connected) {
 		DSSERR("failed to enable display: no output/manager\n");
 		r = -ENODEV;
 		goto err0;
@@ -387,7 +379,7 @@ static int hdmi_display_enable(struct omap_dss_device *dssdev)
 
 	if (hdmi.audio_configured) {
 		r = hdmi5_audio_config(&hdmi.core, &hdmi.wp, &hdmi.audio_config,
-				       hdmi.cfg.timings.pixelclock);
+				       hdmi.cfg.vm.pixelclock);
 		if (r) {
 			DSSERR("Error restoring audio configuration: %d", r);
 			hdmi.audio_abort_cb(&hdmi.pdev->dev);
@@ -463,18 +455,14 @@ static void hdmi_core_disable(struct omap_dss_device *dssdev)
 static int hdmi_connect(struct omap_dss_device *dssdev,
 		struct omap_dss_device *dst)
 {
-	struct omap_overlay_manager *mgr;
+	enum omap_channel channel = dssdev->dispc_channel;
 	int r;
 
 	r = hdmi_init_regulator();
 	if (r)
 		return r;
 
-	mgr = omap_dss_get_overlay_manager(dssdev->dispc_channel);
-	if (!mgr)
-		return -ENODEV;
-
-	r = dss_mgr_connect(mgr, dssdev);
+	r = dss_mgr_connect(channel, dssdev);
 	if (r)
 		return r;
 
@@ -482,7 +470,7 @@ static int hdmi_connect(struct omap_dss_device *dssdev,
 	if (r) {
 		DSSERR("failed to connect output to new device: %s\n",
 				dst->name);
-		dss_mgr_disconnect(mgr, dssdev);
+		dss_mgr_disconnect(channel, dssdev);
 		return r;
 	}
 
@@ -492,6 +480,8 @@ static int hdmi_connect(struct omap_dss_device *dssdev,
 static void hdmi_disconnect(struct omap_dss_device *dssdev,
 		struct omap_dss_device *dst)
 {
+	enum omap_channel channel = dssdev->dispc_channel;
+
 	WARN_ON(dst != dssdev->dst);
 
 	if (dst != dssdev->dst)
@@ -499,8 +489,7 @@ static void hdmi_disconnect(struct omap_dss_device *dssdev,
 
 	omapdss_output_unset_device(dssdev);
 
-	if (dssdev->manager)
-		dss_mgr_disconnect(dssdev->manager, dssdev);
+	dss_mgr_disconnect(channel, dssdev);
 }
 
 static int hdmi_read_edid(struct omap_dss_device *dssdev,
@@ -583,7 +572,7 @@ static int hdmi_probe_of(struct platform_device *pdev)
 	struct device_node *ep;
 	int r;
 
-	ep = omapdss_of_get_first_endpoint(node);
+	ep = of_graph_get_endpoint_by_regs(node, 0, 0);
 	if (!ep)
 		return 0;
 
@@ -681,7 +670,7 @@ static int hdmi_audio_config(struct device *dev,
 	}
 
 	ret = hdmi5_audio_config(&hd->core, &hd->wp, dss_audio,
-				 hd->cfg.timings.pixelclock);
+				 hd->cfg.vm.pixelclock);
 
 	if (!ret) {
 		hd->audio_configured = true;
@@ -705,7 +694,7 @@ static int hdmi_audio_register(struct device *dev)
 {
 	struct omap_hdmi_audio_pdata pdata = {
 		.dev = dev,
-		.dss_version = omapdss_get_version(),
+		.version = 5,
 		.audio_dma_addr = hdmi_wp_get_audio_dma_addr(&hdmi.wp),
 		.ops = &hdmi_audio_ops,
 	};
@@ -738,13 +727,11 @@ static int hdmi5_bind(struct device *dev, struct device *master, void *data)
 	mutex_init(&hdmi.lock);
 	spin_lock_init(&hdmi.audio_playing_lock);
 
-	if (pdev->dev.of_node) {
-		r = hdmi_probe_of(pdev);
-		if (r)
-			return r;
-	}
+	r = hdmi_probe_of(pdev);
+	if (r)
+		return r;
 
-	r = hdmi_wp_init(pdev, &hdmi.wp);
+	r = hdmi_wp_init(pdev, &hdmi.wp, 5);
 	if (r)
 		return r;
 
@@ -752,7 +739,7 @@ static int hdmi5_bind(struct device *dev, struct device *master, void *data)
 	if (r)
 		return r;
 
-	r = hdmi_phy_init(pdev, &hdmi.phy);
+	r = hdmi_phy_init(pdev, &hdmi.phy, 5);
 	if (r)
 		goto err;
 

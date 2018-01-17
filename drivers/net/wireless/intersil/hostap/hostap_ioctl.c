@@ -1,8 +1,9 @@
+// SPDX-License-Identifier: GPL-2.0
 /* ioctl() (mostly Linux Wireless Extensions) routines for Host AP driver */
 
 #include <linux/slab.h>
 #include <linux/types.h>
-#include <linux/sched.h>
+#include <linux/sched/signal.h>
 #include <linux/ethtool.h>
 #include <linux/if_arp.h>
 #include <linux/module.h>
@@ -2544,7 +2545,7 @@ static int prism2_ioctl_priv_prism2_param(struct net_device *dev,
 			ret = -EINVAL;
 		}
 		if (local->iw_mode == IW_MODE_MASTER) {
-			wait_queue_t __wait;
+			wait_queue_entry_t __wait;
 			init_waitqueue_entry(&__wait, current);
 			add_wait_queue(&local->hostscan_wq, &__wait);
 			set_current_state(TASK_INTERRUPTIBLE);
@@ -3041,13 +3042,9 @@ static int prism2_ioctl_priv_download(local_info_t *local, struct iw_point *p)
 	    p->length > 1024 || !p->pointer)
 		return -EINVAL;
 
-	param = kmalloc(p->length, GFP_KERNEL);
-	if (param == NULL)
-		return -ENOMEM;
-
-	if (copy_from_user(param, p->pointer, p->length)) {
-		ret = -EFAULT;
-		goto out;
+	param = memdup_user(p->pointer, p->length);
+	if (IS_ERR(param)) {
+		return PTR_ERR(param);
 	}
 
 	if (p->length < sizeof(struct prism2_download_param) +
@@ -3803,13 +3800,9 @@ static int prism2_ioctl_priv_hostapd(local_info_t *local, struct iw_point *p)
 	    p->length > PRISM2_HOSTAPD_MAX_BUF_SIZE || !p->pointer)
 		return -EINVAL;
 
-	param = kmalloc(p->length, GFP_KERNEL);
-	if (param == NULL)
-		return -ENOMEM;
-
-	if (copy_from_user(param, p->pointer, p->length)) {
-		ret = -EFAULT;
-		goto out;
+	param = memdup_user(p->pointer, p->length);
+	if (IS_ERR(param)) {
+		return PTR_ERR(param);
 	}
 
 	switch (param->cmd) {

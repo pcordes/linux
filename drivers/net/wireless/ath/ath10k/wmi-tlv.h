@@ -543,6 +543,7 @@ enum wmi_tlv_peer_flags {
 	WMI_TLV_PEER_VHT = 0x02000000,
 	WMI_TLV_PEER_80MHZ = 0x04000000,
 	WMI_TLV_PEER_PMF = 0x08000000,
+	WMI_TLV_PEER_160MHZ = 0x20000000,
 };
 
 enum wmi_tlv_tag {
@@ -968,8 +969,8 @@ enum wmi_tlv_service {
 
 #define WMI_SERVICE_IS_ENABLED(wmi_svc_bmap, svc_id, len) \
 	((svc_id) < (len) && \
-	 __le32_to_cpu((wmi_svc_bmap)[(svc_id)/(sizeof(u32))]) & \
-	 BIT((svc_id)%(sizeof(u32))))
+	 __le32_to_cpu((wmi_svc_bmap)[(svc_id) / (sizeof(u32))]) & \
+	 BIT((svc_id) % (sizeof(u32))))
 
 #define SVCMAP(x, y, len) \
 	do { \

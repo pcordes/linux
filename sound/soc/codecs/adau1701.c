@@ -757,7 +757,7 @@ static int adau1701_resume(struct snd_soc_codec *codec)
 #define adau1701_suspend 	NULL
 #endif /* CONFIG_PM */
 
-static struct snd_soc_codec_driver adau1701_codec_drv = {
+static const struct snd_soc_codec_driver adau1701_codec_drv = {
 	.probe			= adau1701_probe,
 	.remove			= adau1701_remove,
 	.resume			= adau1701_resume,
@@ -765,13 +765,14 @@ static struct snd_soc_codec_driver adau1701_codec_drv = {
 	.set_bias_level		= adau1701_set_bias_level,
 	.idle_bias_off		= true,
 
-	.controls		= adau1701_controls,
-	.num_controls		= ARRAY_SIZE(adau1701_controls),
-	.dapm_widgets		= adau1701_dapm_widgets,
-	.num_dapm_widgets	= ARRAY_SIZE(adau1701_dapm_widgets),
-	.dapm_routes		= adau1701_dapm_routes,
-	.num_dapm_routes	= ARRAY_SIZE(adau1701_dapm_routes),
-
+	.component_driver = {
+		.controls		= adau1701_controls,
+		.num_controls		= ARRAY_SIZE(adau1701_controls),
+		.dapm_widgets		= adau1701_dapm_widgets,
+		.num_dapm_widgets	= ARRAY_SIZE(adau1701_dapm_widgets),
+		.dapm_routes		= adau1701_dapm_routes,
+		.num_dapm_routes	= ARRAY_SIZE(adau1701_dapm_routes),
+	},
 	.set_sysclk		= adau1701_set_sysclk,
 };
 

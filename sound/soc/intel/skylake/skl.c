@@ -26,11 +26,17 @@
 #include <linux/pm_runtime.h>
 #include <linux/platform_device.h>
 #include <linux/firmware.h>
+#include <linux/delay.h>
 #include <sound/pcm.h>
-#include "../common/sst-acpi.h"
+#include <sound/soc-acpi.h>
+#include <sound/hda_register.h>
+#include <sound/hdaudio.h>
+#include <sound/hda_i915.h>
 #include "skl.h"
 #include "skl-sst-dsp.h"
 #include "skl-sst-ipc.h"
+
+static struct skl_machine_pdata skl_dmic_data;
 
 /*
  * initialize the PCI registers
@@ -102,6 +108,52 @@ static int skl_init_chip(struct hdac_bus *bus, bool full_reset)
 	skl_enable_miscbdcge(bus->dev, true);
 
 	return ret;
+}
+
+void skl_update_d0i3c(struct device *dev, bool enable)
+{
+	struct pci_dev *pci = to_pci_dev(dev);
+	struct hdac_ext_bus *ebus = pci_get_drvdata(pci);
+	struct hdac_bus *bus = ebus_to_hbus(ebus);
+	u8 reg;
+	int timeout = 50;
+
+	reg = snd_hdac_chip_readb(bus, VS_D0I3C);
+	/* Do not write to D0I3C until command in progress bit is cleared */
+	while ((reg & AZX_REG_VS_D0I3C_CIP) && --timeout) {
+		udelay(10);
+		reg = snd_hdac_chip_readb(bus, VS_D0I3C);
+	}
+
+	/* Highly unlikely. But if it happens, flag error explicitly */
+	if (!timeout) {
+		dev_err(bus->dev, "Before D0I3C update: D0I3C CIP timeout\n");
+		return;
+	}
+
+	if (enable)
+		reg = reg | AZX_REG_VS_D0I3C_I3;
+	else
+		reg = reg & (~AZX_REG_VS_D0I3C_I3);
+
+	snd_hdac_chip_writeb(bus, VS_D0I3C, reg);
+
+	timeout = 50;
+	/* Wait for cmd in progress to be cleared before exiting the function */
+	reg = snd_hdac_chip_readb(bus, VS_D0I3C);
+	while ((reg & AZX_REG_VS_D0I3C_CIP) && --timeout) {
+		udelay(10);
+		reg = snd_hdac_chip_readb(bus, VS_D0I3C);
+	}
+
+	/* Highly unlikely. But if it happens, flag error explicitly */
+	if (!timeout) {
+		dev_err(bus->dev, "After D0I3C update: D0I3C CIP timeout\n");
+		return;
+	}
+
+	dev_dbg(bus->dev, "D0I3C register = 0x%x\n",
+			snd_hdac_chip_readb(bus, VS_D0I3C));
 }
 
 /* called from IRQ */
@@ -176,11 +228,21 @@ static int skl_acquire_irq(struct hdac_ext_bus *ebus, int do_disconnect)
 	return 0;
 }
 
+static int skl_suspend_late(struct device *dev)
+{
+	struct pci_dev *pci = to_pci_dev(dev);
+	struct hdac_ext_bus *ebus = pci_get_drvdata(pci);
+	struct skl *skl = ebus_to_skl(ebus);
+
+	return skl_suspend_late_dsp(skl);
+}
+
 #ifdef CONFIG_PM
 static int _skl_suspend(struct hdac_ext_bus *ebus)
 {
 	struct skl *skl = ebus_to_skl(ebus);
 	struct hdac_bus *bus = ebus_to_hbus(ebus);
+	struct pci_dev *pci = to_pci_dev(bus->dev);
 	int ret;
 
 	snd_hdac_ext_bus_link_power_down_all(ebus);
@@ -190,9 +252,12 @@ static int _skl_suspend(struct hdac_ext_bus *ebus)
 		return ret;
 
 	snd_hdac_bus_stop_chip(bus);
+	update_pci_dword(pci, AZX_PCIREG_PGCTL,
+		AZX_PGCTL_LSRMD_MASK, AZX_PGCTL_LSRMD_MASK);
 	skl_enable_miscbdcge(bus->dev, false);
 	snd_hdac_bus_enter_link_reset(bus);
 	skl_enable_miscbdcge(bus->dev, true);
+	skl_cleanup_resources(skl);
 
 	return 0;
 }
@@ -219,20 +284,36 @@ static int skl_suspend(struct device *dev)
 	struct hdac_ext_bus *ebus = pci_get_drvdata(pci);
 	struct skl *skl  = ebus_to_skl(ebus);
 	struct hdac_bus *bus = ebus_to_hbus(ebus);
+	int ret = 0;
 
 	/*
 	 * Do not suspend if streams which are marked ignore suspend are
 	 * running, we need to save the state for these and continue
 	 */
 	if (skl->supend_active) {
+		/* turn off the links and stop the CORB/RIRB DMA if it is On */
 		snd_hdac_ext_bus_link_power_down_all(ebus);
+
+		if (ebus->cmd_dma_state)
+			snd_hdac_bus_stop_cmd_io(&ebus->bus);
+
 		enable_irq_wake(bus->irq);
 		pci_save_state(pci);
-		pci_disable_device(pci);
-		return 0;
 	} else {
-		return _skl_suspend(ebus);
+		ret = _skl_suspend(ebus);
+		if (ret < 0)
+			return ret;
+		skl->skl_sst->fw_loaded = false;
 	}
+
+	if (IS_ENABLED(CONFIG_SND_SOC_HDAC_HDMI)) {
+		ret = snd_hdac_display_power(bus, false);
+		if (ret < 0)
+			dev_err(bus->dev,
+				"Cannot turn OFF display power on i915\n");
+	}
+
+	return ret;
 }
 
 static int skl_resume(struct device *dev)
@@ -241,7 +322,18 @@ static int skl_resume(struct device *dev)
 	struct hdac_ext_bus *ebus = pci_get_drvdata(pci);
 	struct skl *skl  = ebus_to_skl(ebus);
 	struct hdac_bus *bus = ebus_to_hbus(ebus);
+	struct hdac_ext_link *hlink = NULL;
 	int ret;
+
+	/* Turned OFF in HDMI codec driver after codec reconfiguration */
+	if (IS_ENABLED(CONFIG_SND_SOC_HDAC_HDMI)) {
+		ret = snd_hdac_display_power(bus, true);
+		if (ret < 0) {
+			dev_err(bus->dev,
+				"Cannot turn on display power on i915\n");
+			return ret;
+		}
+	}
 
 	/*
 	 * resume only when we are not in suspend active, otherwise need to
@@ -249,11 +341,31 @@ static int skl_resume(struct device *dev)
 	 */
 	if (skl->supend_active) {
 		pci_restore_state(pci);
-		ret = pci_enable_device(pci);
 		snd_hdac_ext_bus_link_power_up_all(ebus);
 		disable_irq_wake(bus->irq);
+		/*
+		 * turn On the links which are On before active suspend
+		 * and start the CORB/RIRB DMA if On before
+		 * active suspend.
+		 */
+		list_for_each_entry(hlink, &ebus->hlink_list, list) {
+			if (hlink->ref_count)
+				snd_hdac_ext_bus_link_power_up(hlink);
+		}
+
+		if (ebus->cmd_dma_state)
+			snd_hdac_bus_init_cmd_io(&ebus->bus);
 	} else {
 		ret = _skl_resume(ebus);
+
+		/* turn off the links which are off before suspend */
+		list_for_each_entry(hlink, &ebus->hlink_list, list) {
+			if (!hlink->ref_count)
+				snd_hdac_ext_bus_link_power_down(hlink);
+		}
+
+		if (!ebus->cmd_dma_state)
+			snd_hdac_bus_stop_cmd_io(&ebus->bus);
 	}
 
 	return ret;
@@ -287,6 +399,7 @@ static int skl_runtime_resume(struct device *dev)
 static const struct dev_pm_ops skl_pm = {
 	SET_SYSTEM_SLEEP_PM_OPS(skl_suspend, skl_resume)
 	SET_RUNTIME_PM_OPS(skl_runtime_suspend, skl_runtime_resume, NULL)
+	.suspend_late = skl_suspend_late,
 };
 
 /*
@@ -297,22 +410,27 @@ static int skl_free(struct hdac_ext_bus *ebus)
 	struct skl *skl  = ebus_to_skl(ebus);
 	struct hdac_bus *bus = ebus_to_hbus(ebus);
 
-	skl->init_failed = 1; /* to be sure */
+	skl->init_done = 0; /* to be sure */
 
 	snd_hdac_ext_stop_streams(ebus);
 
 	if (bus->irq >= 0)
-		free_irq(bus->irq, (void *)bus);
-	if (bus->remap_addr)
-		iounmap(bus->remap_addr);
-
+		free_irq(bus->irq, (void *)ebus);
 	snd_hdac_bus_free_stream_pages(bus);
 	snd_hdac_stream_free_all(ebus);
 	snd_hdac_link_free_all(ebus);
+
+	if (bus->remap_addr)
+		iounmap(bus->remap_addr);
+
 	pci_release_regions(skl->pci);
 	pci_disable_device(skl->pci);
 
 	snd_hdac_ext_bus_exit(ebus);
+
+	cancel_work_sync(&skl->probe_work);
+	if (IS_ENABLED(CONFIG_SND_SOC_HDAC_HDMI))
+		snd_hdac_i915_exit(&ebus->bus);
 
 	return 0;
 }
@@ -321,10 +439,10 @@ static int skl_machine_device_register(struct skl *skl, void *driver_data)
 {
 	struct hdac_bus *bus = ebus_to_hbus(&skl->ebus);
 	struct platform_device *pdev;
-	struct sst_acpi_mach *mach = driver_data;
+	struct snd_soc_acpi_mach *mach = driver_data;
 	int ret;
 
-	mach = sst_acpi_find_machine(mach);
+	mach = snd_soc_acpi_find_machine(mach);
 	if (mach == NULL) {
 		dev_err(bus->dev, "No matching machine driver found\n");
 		return -ENODEV;
@@ -343,6 +461,13 @@ static int skl_machine_device_register(struct skl *skl, void *driver_data)
 		platform_device_put(pdev);
 		return -EIO;
 	}
+
+	if (mach->pdata) {
+		skl->use_tplg_pcm =
+			((struct skl_machine_pdata *)mach->pdata)->use_tplg_pcm;
+		dev_set_drvdata(&pdev->dev, mach->pdata);
+	}
+
 	skl->i2s_dev = pdev;
 
 	return 0;
@@ -392,7 +517,7 @@ static int probe_codec(struct hdac_ext_bus *ebus, int addr)
 	struct hdac_bus *bus = ebus_to_hbus(ebus);
 	unsigned int cmd = (addr << 28) | (AC_NODE_ROOT << 20) |
 		(AC_VERB_PARAMETERS << 8) | AC_PAR_VENDOR_ID;
-	unsigned int res;
+	unsigned int res = -1;
 
 	mutex_lock(&bus->cmd_mutex);
 	snd_hdac_bus_send_cmd(bus, cmd);
@@ -406,7 +531,7 @@ static int probe_codec(struct hdac_ext_bus *ebus, int addr)
 }
 
 /* Codec initialization */
-static int skl_codec_create(struct hdac_ext_bus *ebus)
+static void skl_codec_create(struct hdac_ext_bus *ebus)
 {
 	struct hdac_bus *bus = ebus_to_hbus(ebus);
 	int c, max_slots;
@@ -437,14 +562,88 @@ static int skl_codec_create(struct hdac_ext_bus *ebus)
 			}
 		}
 	}
-
-	return 0;
 }
 
 static const struct hdac_bus_ops bus_core_ops = {
 	.command = snd_hdac_bus_send_cmd,
 	.get_response = snd_hdac_bus_get_response,
 };
+
+static int skl_i915_init(struct hdac_bus *bus)
+{
+	int err;
+
+	/*
+	 * The HDMI codec is in GPU so we need to ensure that it is powered
+	 * up and ready for probe
+	 */
+	err = snd_hdac_i915_init(bus);
+	if (err < 0)
+		return err;
+
+	err = snd_hdac_display_power(bus, true);
+	if (err < 0)
+		dev_err(bus->dev, "Cannot turn on display power on i915\n");
+
+	return err;
+}
+
+static void skl_probe_work(struct work_struct *work)
+{
+	struct skl *skl = container_of(work, struct skl, probe_work);
+	struct hdac_ext_bus *ebus = &skl->ebus;
+	struct hdac_bus *bus = ebus_to_hbus(ebus);
+	struct hdac_ext_link *hlink = NULL;
+	int err;
+
+	if (IS_ENABLED(CONFIG_SND_SOC_HDAC_HDMI)) {
+		err = skl_i915_init(bus);
+		if (err < 0)
+			return;
+	}
+
+	err = skl_init_chip(bus, true);
+	if (err < 0) {
+		dev_err(bus->dev, "Init chip failed with err: %d\n", err);
+		goto out_err;
+	}
+
+	/* codec detection */
+	if (!bus->codec_mask)
+		dev_info(bus->dev, "no hda codecs found!\n");
+
+	/* create codec instances */
+	skl_codec_create(ebus);
+
+	if (IS_ENABLED(CONFIG_SND_SOC_HDAC_HDMI)) {
+		err = snd_hdac_display_power(bus, false);
+		if (err < 0) {
+			dev_err(bus->dev, "Cannot turn off display power on i915\n");
+			return;
+		}
+	}
+
+	/* register platform dai and controls */
+	err = skl_platform_register(bus->dev);
+	if (err < 0)
+		return;
+	/*
+	 * we are done probing so decrement link counts
+	 */
+	list_for_each_entry(hlink, &ebus->hlink_list, list)
+		snd_hdac_ext_bus_link_put(ebus, hlink);
+
+	/* configure PM */
+	pm_runtime_put_noidle(bus->dev);
+	pm_runtime_allow(bus->dev);
+	skl->init_done = 1;
+
+	return;
+
+out_err:
+	if (IS_ENABLED(CONFIG_SND_SOC_HDAC_HDMI))
+		err = snd_hdac_display_power(bus, false);
+}
 
 /*
  * constructor
@@ -473,6 +672,7 @@ static int skl_create(struct pci_dev *pci,
 	snd_hdac_ext_bus_init(ebus, &pci->dev, &bus_core_ops, io_ops);
 	ebus->bus.use_posbuf = 1;
 	skl->pci = pci;
+	INIT_WORK(&skl->probe_work, skl_probe_work);
 
 	ebus->bus.bdl_pos_adj = 0;
 
@@ -501,7 +701,9 @@ static int skl_first_init(struct hdac_ext_bus *ebus)
 		return -ENXIO;
 	}
 
-	snd_hdac_ext_bus_parse_capabilities(ebus);
+	skl_init_chip(bus, true);
+
+	snd_hdac_bus_parse_capabilities(bus);
 
 	if (skl_acquire_irq(ebus, 0) < 0)
 		return -EBUSY;
@@ -543,14 +745,7 @@ static int skl_first_init(struct hdac_ext_bus *ebus)
 	/* initialize chip */
 	skl_init_pci(skl);
 
-	skl_init_chip(bus, true);
-
-	/* codec detection */
-	if (!bus->codec_mask) {
-		dev_info(bus->dev, "no hda codecs found!\n");
-	}
-
-	return 0;
+	return skl_init_chip(bus, true);
 }
 
 static int skl_probe(struct pci_dev *pci,
@@ -573,19 +768,33 @@ static int skl_probe(struct pci_dev *pci,
 	if (err < 0)
 		goto out_free;
 
+	skl->pci_id = pci->device;
+
+	device_disable_async_suspend(bus->dev);
+
 	skl->nhlt = skl_nhlt_init(bus->dev);
 
-	if (skl->nhlt == NULL)
+	if (skl->nhlt == NULL) {
+		err = -ENODEV;
 		goto out_free;
+	}
+
+	err = skl_nhlt_create_sysfs(skl);
+	if (err < 0)
+		goto out_nhlt_free;
+
+	skl_nhlt_update_topology_bin(skl);
 
 	pci_set_drvdata(skl->pci, ebus);
 
+	skl_dmic_data.dmic_num = skl_get_dmic_geo(skl);
+
 	/* check if dsp is there */
-	if (ebus->ppcap) {
+	if (bus->ppcap) {
 		err = skl_machine_device_register(skl,
 				  (void *)pci_id->driver_data);
 		if (err < 0)
-			goto out_free;
+			goto out_nhlt_free;
 
 		err = skl_init_dsp(skl);
 		if (err < 0) {
@@ -595,43 +804,55 @@ static int skl_probe(struct pci_dev *pci,
 		skl->skl_sst->enable_miscbdcge = skl_enable_miscbdcge;
 
 	}
-	if (ebus->mlcap)
+	if (bus->mlcap)
 		snd_hdac_ext_bus_get_ml_capabilities(ebus);
+
+	snd_hdac_bus_stop_chip(bus);
 
 	/* create device for soc dmic */
 	err = skl_dmic_device_register(skl);
 	if (err < 0)
 		goto out_dsp_free;
 
-	/* register platform dai and controls */
-	err = skl_platform_register(bus->dev);
-	if (err < 0)
-		goto out_dmic_free;
-
-	/* create codec instances */
-	err = skl_codec_create(ebus);
-	if (err < 0)
-		goto out_unregister;
-
-	/*configure PM */
-	pm_runtime_put_noidle(bus->dev);
-	pm_runtime_allow(bus->dev);
+	schedule_work(&skl->probe_work);
 
 	return 0;
 
-out_unregister:
-	skl_platform_unregister(bus->dev);
-out_dmic_free:
-	skl_dmic_device_unregister(skl);
 out_dsp_free:
 	skl_free_dsp(skl);
 out_mach_free:
 	skl_machine_device_unregister(skl);
+out_nhlt_free:
+	skl_nhlt_free(skl->nhlt);
 out_free:
-	skl->init_failed = 1;
 	skl_free(ebus);
 
 	return err;
+}
+
+static void skl_shutdown(struct pci_dev *pci)
+{
+	struct hdac_ext_bus *ebus = pci_get_drvdata(pci);
+	struct hdac_bus *bus = ebus_to_hbus(ebus);
+	struct hdac_stream *s;
+	struct hdac_ext_stream *stream;
+	struct skl *skl;
+
+	if (ebus == NULL)
+		return;
+
+	skl = ebus_to_skl(ebus);
+
+	if (!skl->init_done)
+		return;
+
+	snd_hdac_ext_stop_streams(ebus);
+	list_for_each_entry(s, &bus->stream_list, list) {
+		stream = stream_to_hdac_ext_stream(s);
+		snd_hdac_ext_stream_decouple(ebus, stream, false);
+	}
+
+	snd_hdac_bus_stop_chip(bus);
 }
 
 static void skl_remove(struct pci_dev *pci)
@@ -639,26 +860,157 @@ static void skl_remove(struct pci_dev *pci)
 	struct hdac_ext_bus *ebus = pci_get_drvdata(pci);
 	struct skl *skl = ebus_to_skl(ebus);
 
-	if (skl->tplg)
-		release_firmware(skl->tplg);
+	release_firmware(skl->tplg);
 
-	if (pci_dev_run_wake(pci))
-		pm_runtime_get_noresume(&pci->dev);
-	pci_dev_put(pci);
+	pm_runtime_get_noresume(&pci->dev);
+
+	/* codec removal, invoke bus_device_remove */
+	snd_hdac_ext_bus_device_remove(ebus);
+
+	skl->debugfs = NULL;
 	skl_platform_unregister(&pci->dev);
 	skl_free_dsp(skl);
 	skl_machine_device_unregister(skl);
 	skl_dmic_device_unregister(skl);
+	skl_nhlt_remove_sysfs(skl);
+	skl_nhlt_free(skl->nhlt);
 	skl_free(ebus);
 	dev_set_drvdata(&pci->dev, NULL);
 }
 
-static struct sst_acpi_mach sst_skl_devdata[] = {
-	{ "INT343A", "skl_alc286s_i2s", "intel/dsp_fw_release.bin", NULL, NULL, NULL },
-	{ "INT343B", "skl_nau88l25_ssm4567_i2s", "intel/dsp_fw_release.bin",
-				NULL, NULL, NULL },
-	{ "MX98357A", "skl_nau88l25_max98357a_i2s", "intel/dsp_fw_release.bin",
-				NULL, NULL, NULL },
+static struct snd_soc_acpi_codecs skl_codecs = {
+	.num_codecs = 1,
+	.codecs = {"10508825"}
+};
+
+static struct snd_soc_acpi_codecs kbl_codecs = {
+	.num_codecs = 1,
+	.codecs = {"10508825"}
+};
+
+static struct snd_soc_acpi_codecs bxt_codecs = {
+	.num_codecs = 1,
+	.codecs = {"MX98357A"}
+};
+
+static struct snd_soc_acpi_codecs kbl_poppy_codecs = {
+	.num_codecs = 1,
+	.codecs = {"10EC5663"}
+};
+
+static struct snd_soc_acpi_codecs kbl_5663_5514_codecs = {
+	.num_codecs = 2,
+	.codecs = {"10EC5663", "10EC5514"}
+};
+
+static struct skl_machine_pdata cnl_pdata = {
+	.use_tplg_pcm = true,
+};
+
+static struct snd_soc_acpi_mach sst_skl_devdata[] = {
+	{
+		.id = "INT343A",
+		.drv_name = "skl_alc286s_i2s",
+		.fw_filename = "intel/dsp_fw_release.bin",
+	},
+	{
+		.id = "INT343B",
+		.drv_name = "skl_n88l25_s4567",
+		.fw_filename = "intel/dsp_fw_release.bin",
+		.machine_quirk = snd_soc_acpi_codec_list,
+		.quirk_data = &skl_codecs,
+		.pdata = &skl_dmic_data
+	},
+	{
+		.id = "MX98357A",
+		.drv_name = "skl_n88l25_m98357a",
+		.fw_filename = "intel/dsp_fw_release.bin",
+		.machine_quirk = snd_soc_acpi_codec_list,
+		.quirk_data = &skl_codecs,
+		.pdata = &skl_dmic_data
+	},
+	{}
+};
+
+static struct snd_soc_acpi_mach sst_bxtp_devdata[] = {
+	{
+		.id = "INT343A",
+		.drv_name = "bxt_alc298s_i2s",
+		.fw_filename = "intel/dsp_fw_bxtn.bin",
+	},
+	{
+		.id = "DLGS7219",
+		.drv_name = "bxt_da7219_max98357a_i2s",
+		.fw_filename = "intel/dsp_fw_bxtn.bin",
+		.machine_quirk = snd_soc_acpi_codec_list,
+		.quirk_data = &bxt_codecs,
+	},
+	{}
+};
+
+static struct snd_soc_acpi_mach sst_kbl_devdata[] = {
+	{
+		.id = "INT343A",
+		.drv_name = "kbl_alc286s_i2s",
+		.fw_filename = "intel/dsp_fw_kbl.bin",
+	},
+	{
+		.id = "INT343B",
+		.drv_name = "kbl_n88l25_s4567",
+		.fw_filename = "intel/dsp_fw_kbl.bin",
+		.machine_quirk = snd_soc_acpi_codec_list,
+		.quirk_data = &kbl_codecs,
+		.pdata = &skl_dmic_data
+	},
+	{
+		.id = "MX98357A",
+		.drv_name = "kbl_n88l25_m98357a",
+		.fw_filename = "intel/dsp_fw_kbl.bin",
+		.machine_quirk = snd_soc_acpi_codec_list,
+		.quirk_data = &kbl_codecs,
+		.pdata = &skl_dmic_data
+	},
+	{
+		.id = "MX98927",
+		.drv_name = "kbl_r5514_5663_max",
+		.fw_filename = "intel/dsp_fw_kbl.bin",
+		.machine_quirk = snd_soc_acpi_codec_list,
+		.quirk_data = &kbl_5663_5514_codecs,
+		.pdata = &skl_dmic_data
+	},
+	{
+		.id = "MX98927",
+		.drv_name = "kbl_rt5663_m98927",
+		.fw_filename = "intel/dsp_fw_kbl.bin",
+		.machine_quirk = snd_soc_acpi_codec_list,
+		.quirk_data = &kbl_poppy_codecs,
+		.pdata = &skl_dmic_data
+	},
+	{
+		.id = "10EC5663",
+		.drv_name = "kbl_rt5663",
+		.fw_filename = "intel/dsp_fw_kbl.bin",
+	},
+
+	{}
+};
+
+static struct snd_soc_acpi_mach sst_glk_devdata[] = {
+	{
+		.id = "INT343A",
+		.drv_name = "glk_alc298s_i2s",
+		.fw_filename = "intel/dsp_fw_glk.bin",
+	},
+	{}
+};
+
+static const struct snd_soc_acpi_mach sst_cnl_devdata[] = {
+	{
+		.id = "INT34C2",
+		.drv_name = "cnl_rt274",
+		.fw_filename = "intel/dsp_fw_cnl.bin",
+		.pdata = &cnl_pdata,
+	},
 	{}
 };
 
@@ -667,6 +1019,18 @@ static const struct pci_device_id skl_ids[] = {
 	/* Sunrise Point-LP */
 	{ PCI_DEVICE(0x8086, 0x9d70),
 		.driver_data = (unsigned long)&sst_skl_devdata},
+	/* BXT-P */
+	{ PCI_DEVICE(0x8086, 0x5a98),
+		.driver_data = (unsigned long)&sst_bxtp_devdata},
+	/* KBL */
+	{ PCI_DEVICE(0x8086, 0x9D71),
+		.driver_data = (unsigned long)&sst_kbl_devdata},
+	/* GLK */
+	{ PCI_DEVICE(0x8086, 0x3198),
+		.driver_data = (unsigned long)&sst_glk_devdata},
+	/* CNL */
+	{ PCI_DEVICE(0x8086, 0x9dc8),
+		.driver_data = (unsigned long)&sst_cnl_devdata},
 	{ 0, }
 };
 MODULE_DEVICE_TABLE(pci, skl_ids);
@@ -677,6 +1041,7 @@ static struct pci_driver skl_driver = {
 	.id_table = skl_ids,
 	.probe = skl_probe,
 	.remove = skl_remove,
+	.shutdown = skl_shutdown,
 	.driver = {
 		.pm = &skl_pm,
 	},

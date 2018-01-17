@@ -736,7 +736,7 @@ static int da9063_regulator_probe(struct platform_device *pdev)
 	if (IS_ERR(regl_pdata) || regl_pdata->n_regulators == 0) {
 		dev_err(&pdev->dev,
 			"No regulators defined for the platform\n");
-		return PTR_ERR(regl_pdata);
+		return -ENODEV;
 	}
 
 	/* Find regulators set for particular device model */
@@ -900,4 +900,4 @@ module_exit(da9063_regulator_cleanup);
 MODULE_AUTHOR("Krystian Garbaciak <krystian.garbaciak@diasemi.com>");
 MODULE_DESCRIPTION("DA9063 regulators driver");
 MODULE_LICENSE("GPL");
-MODULE_ALIAS("paltform:" DA9063_DRVNAME_REGULATORS);
+MODULE_ALIAS("platform:" DA9063_DRVNAME_REGULATORS);

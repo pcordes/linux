@@ -545,10 +545,12 @@ static struct snd_soc_dai_driver wm8804_dai = {
 static const struct snd_soc_codec_driver soc_codec_dev_wm8804 = {
 	.idle_bias_off = true,
 
-	.dapm_widgets = wm8804_dapm_widgets,
-	.num_dapm_widgets = ARRAY_SIZE(wm8804_dapm_widgets),
-	.dapm_routes = wm8804_dapm_routes,
-	.num_dapm_routes = ARRAY_SIZE(wm8804_dapm_routes),
+	.component_driver = {
+		.dapm_widgets		= wm8804_dapm_widgets,
+		.num_dapm_widgets	= ARRAY_SIZE(wm8804_dapm_widgets),
+		.dapm_routes		= wm8804_dapm_routes,
+		.num_dapm_routes	= ARRAY_SIZE(wm8804_dapm_routes),
+	},
 };
 
 const struct regmap_config wm8804_regmap_config = {
@@ -621,8 +623,7 @@ int wm8804_probe(struct device *dev, struct regmap *regmap)
 		return ret;
 	}
 
-	if (wm8804->reset)
-		gpiod_set_value_cansleep(wm8804->reset, 1);
+	gpiod_set_value_cansleep(wm8804->reset, 1);
 
 	ret = regmap_read(regmap, WM8804_RST_DEVID1, &id1);
 	if (ret < 0) {

@@ -1087,14 +1087,16 @@ static struct snd_soc_dai_driver isabelle_dai[] = {
 	},
 };
 
-static struct snd_soc_codec_driver soc_codec_dev_isabelle = {
+static const struct snd_soc_codec_driver soc_codec_dev_isabelle = {
 	.set_bias_level = isabelle_set_bias_level,
-	.controls = isabelle_snd_controls,
-	.num_controls = ARRAY_SIZE(isabelle_snd_controls),
-	.dapm_widgets = isabelle_dapm_widgets,
-	.num_dapm_widgets = ARRAY_SIZE(isabelle_dapm_widgets),
-	.dapm_routes = isabelle_intercon,
-	.num_dapm_routes = ARRAY_SIZE(isabelle_intercon),
+	.component_driver = {
+		.controls		= isabelle_snd_controls,
+		.num_controls		= ARRAY_SIZE(isabelle_snd_controls),
+		.dapm_widgets		= isabelle_dapm_widgets,
+		.num_dapm_widgets	= ARRAY_SIZE(isabelle_dapm_widgets),
+		.dapm_routes		= isabelle_intercon,
+		.num_dapm_routes	= ARRAY_SIZE(isabelle_intercon),
+	},
 	.idle_bias_off = true,
 };
 

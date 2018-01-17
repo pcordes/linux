@@ -46,10 +46,14 @@ config OF_EARLY_FLATTREE
 config OF_PROMTREE
 	bool
 
+config OF_KOBJ
+	def_bool SYSFS
+
 # Hardly any platforms need this.  It is safe to select, but only do so if you
 # need it.
 config OF_DYNAMIC
 	bool "Support for dynamic device trees" if OF_UNITTEST
+	select OF_KOBJ
 	help
 	  On some platforms, the device tree can be manipulated at runtime.
 	  While this option is selected automatically on such platforms, you
@@ -74,6 +78,7 @@ config OF_NET
 config OF_MDIO
 	def_tristate PHYLIB
 	depends on PHYLIB
+	select FIXED_PHY
 	help
 	  OpenFirmware MDIO bus (Ethernet PHY) accessors
 
@@ -88,10 +93,6 @@ config OF_PCI_IRQ
 	depends on OF_PCI && OF_IRQ
 	help
 	  OpenFirmware PCI IRQ routing helpers
-
-config OF_MTD
-	depends on MTD
-	def_bool y
 
 config OF_RESERVED_MEM
 	depends on OF_EARLY_FLATTREE
@@ -111,5 +112,8 @@ config OF_OVERLAY
 	  device tree with dynamically loaded data.
 	  While this option is selected automatically when needed, you can
 	  enable it manually to improve device tree unit test coverage.
+
+config OF_NUMA
+	bool
 
 endif # OF

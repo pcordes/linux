@@ -29,6 +29,7 @@
 #define BRCMF_FW_MAX_NVRAM_SIZE			64000
 #define BRCMF_FW_NVRAM_DEVPATH_LEN		19	/* devpath0=pcie/1/4/ */
 #define BRCMF_FW_NVRAM_PCIEDEV_LEN		10	/* pcie/1/4/ + \0 */
+#define BRCMF_FW_DEFAULT_BOARDREV		"boardrev=0xff"
 
 enum nvram_parser_state {
 	IDLE,
@@ -51,6 +52,7 @@ enum nvram_parser_state {
  * @entry: start position of key,value entry.
  * @multi_dev_v1: detect pcie multi device v1 (compressed).
  * @multi_dev_v2: detect pcie multi device v2.
+ * @boardrev_found: nvram contains boardrev information.
  */
 struct nvram_parser {
 	enum nvram_parser_state state;
@@ -63,6 +65,7 @@ struct nvram_parser {
 	u32 entry;
 	bool multi_dev_v1;
 	bool multi_dev_v2;
+	bool boardrev_found;
 };
 
 /**
@@ -93,7 +96,7 @@ static enum nvram_parser_state brcmf_nvram_handle_idle(struct nvram_parser *nvp)
 	c = nvp->data[nvp->pos];
 	if (c == '\n')
 		return COMMENT;
-	if (is_whitespace(c))
+	if (is_whitespace(c) || c == '\0')
 		goto proceed;
 	if (c == '#')
 		return COMMENT;
@@ -125,6 +128,8 @@ static enum nvram_parser_state brcmf_nvram_handle_key(struct nvram_parser *nvp)
 			nvp->multi_dev_v1 = true;
 		if (strncmp(&nvp->data[nvp->entry], "pcie/", 5) == 0)
 			nvp->multi_dev_v2 = true;
+		if (strncmp(&nvp->data[nvp->entry], "boardrev", 8) == 0)
+			nvp->boardrev_found = true;
 	} else if (!is_nvram_char(c) || c == ' ') {
 		brcmf_dbg(INFO, "warning: ln=%d:col=%d: '=' expected, skip invalid key entry\n",
 			  nvp->line, nvp->column);
@@ -284,6 +289,8 @@ static void brcmf_fw_strip_multi_v1(struct nvram_parser *nvp, u16 domain_nr,
 	while (i < nvp->nvram_len) {
 		if ((nvp->nvram[i] - '0' == id) && (nvp->nvram[i + 1] == ':')) {
 			i += 2;
+			if (strncmp(&nvp->nvram[i], "boardrev", 8) == 0)
+				nvp->boardrev_found = true;
 			while (nvp->nvram[i] != 0) {
 				nvram[j] = nvp->nvram[i];
 				i++;
@@ -335,6 +342,8 @@ static void brcmf_fw_strip_multi_v2(struct nvram_parser *nvp, u16 domain_nr,
 	while (i < nvp->nvram_len - len) {
 		if (strncmp(&nvp->nvram[i], prefix, len) == 0) {
 			i += len;
+			if (strncmp(&nvp->nvram[i], "boardrev", 8) == 0)
+				nvp->boardrev_found = true;
 			while (nvp->nvram[i] != 0) {
 				nvram[j] = nvp->nvram[i];
 				i++;
@@ -354,6 +363,18 @@ static void brcmf_fw_strip_multi_v2(struct nvram_parser *nvp, u16 domain_nr,
 fail:
 	kfree(nvram);
 	nvp->nvram_len = 0;
+}
+
+static void brcmf_fw_add_defaults(struct nvram_parser *nvp)
+{
+	if (nvp->boardrev_found)
+		return;
+
+	memcpy(&nvp->nvram[nvp->nvram_len], &BRCMF_FW_DEFAULT_BOARDREV,
+	       strlen(BRCMF_FW_DEFAULT_BOARDREV));
+	nvp->nvram_len += strlen(BRCMF_FW_DEFAULT_BOARDREV);
+	nvp->nvram[nvp->nvram_len] = '\0';
+	nvp->nvram_len++;
 }
 
 /* brcmf_nvram_strip :Takes a buffer of "<var>=<value>\n" lines read from a fil
@@ -377,15 +398,20 @@ static void *brcmf_fw_nvram_strip(const u8 *data, size_t data_len,
 		if (nvp.state == END)
 			break;
 	}
-	if (nvp.multi_dev_v1)
+	if (nvp.multi_dev_v1) {
+		nvp.boardrev_found = false;
 		brcmf_fw_strip_multi_v1(&nvp, domain_nr, bus_nr);
-	else if (nvp.multi_dev_v2)
+	} else if (nvp.multi_dev_v2) {
+		nvp.boardrev_found = false;
 		brcmf_fw_strip_multi_v2(&nvp, domain_nr, bus_nr);
+	}
 
 	if (nvp.nvram_len == 0) {
 		kfree(nvp.nvram);
 		return NULL;
 	}
+
+	brcmf_fw_add_defaults(&nvp);
 
 	pad = nvp.nvram_len;
 	*new_length = roundup(nvp.nvram_len + 1, 4);
@@ -416,7 +442,7 @@ struct brcmf_fw {
 	const char *nvram_name;
 	u16 domain_nr;
 	u16 bus_nr;
-	void (*done)(struct device *dev, const struct firmware *fw,
+	void (*done)(struct device *dev, int err, const struct firmware *fw,
 		     void *nvram_image, u32 nvram_len);
 };
 
@@ -451,52 +477,51 @@ static void brcmf_fw_request_nvram_done(const struct firmware *fw, void *ctx)
 	if (!nvram && !(fwctx->flags & BRCMF_FW_REQ_NV_OPTIONAL))
 		goto fail;
 
-	fwctx->done(fwctx->dev, fwctx->code, nvram, nvram_length);
+	fwctx->done(fwctx->dev, 0, fwctx->code, nvram, nvram_length);
 	kfree(fwctx);
 	return;
 
 fail:
 	brcmf_dbg(TRACE, "failed: dev=%s\n", dev_name(fwctx->dev));
 	release_firmware(fwctx->code);
-	device_release_driver(fwctx->dev);
+	fwctx->done(fwctx->dev, -ENOENT, NULL, NULL, 0);
 	kfree(fwctx);
 }
 
 static void brcmf_fw_request_code_done(const struct firmware *fw, void *ctx)
 {
 	struct brcmf_fw *fwctx = ctx;
-	int ret;
+	int ret = 0;
 
 	brcmf_dbg(TRACE, "enter: dev=%s\n", dev_name(fwctx->dev));
-	if (!fw)
+	if (!fw) {
+		ret = -ENOENT;
 		goto fail;
-
-	/* only requested code so done here */
-	if (!(fwctx->flags & BRCMF_FW_REQUEST_NVRAM)) {
-		fwctx->done(fwctx->dev, fw, NULL, 0);
-		kfree(fwctx);
-		return;
 	}
+	/* only requested code so done here */
+	if (!(fwctx->flags & BRCMF_FW_REQUEST_NVRAM))
+		goto done;
+
 	fwctx->code = fw;
 	ret = request_firmware_nowait(THIS_MODULE, true, fwctx->nvram_name,
 				      fwctx->dev, GFP_KERNEL, fwctx,
 				      brcmf_fw_request_nvram_done);
 
-	if (!ret)
-		return;
-
-	brcmf_fw_request_nvram_done(NULL, fwctx);
+	/* pass NULL to nvram callback for bcm47xx fallback */
+	if (ret)
+		brcmf_fw_request_nvram_done(NULL, fwctx);
 	return;
 
 fail:
 	brcmf_dbg(TRACE, "failed: dev=%s\n", dev_name(fwctx->dev));
-	device_release_driver(fwctx->dev);
+done:
+	fwctx->done(fwctx->dev, ret, fw, NULL, 0);
 	kfree(fwctx);
 }
 
 int brcmf_fw_get_firmwares_pcie(struct device *dev, u16 flags,
 				const char *code, const char *nvram,
-				void (*fw_cb)(struct device *dev,
+				void (*fw_cb)(struct device *dev, int err,
 					      const struct firmware *fw,
 					      void *nvram_image, u32 nvram_len),
 				u16 domain_nr, u16 bus_nr)
@@ -529,7 +554,7 @@ int brcmf_fw_get_firmwares_pcie(struct device *dev, u16 flags,
 
 int brcmf_fw_get_firmwares(struct device *dev, u16 flags,
 			   const char *code, const char *nvram,
-			   void (*fw_cb)(struct device *dev,
+			   void (*fw_cb)(struct device *dev, int err,
 					 const struct firmware *fw,
 					 void *nvram_image, u32 nvram_len))
 {
@@ -575,6 +600,9 @@ int brcmf_fw_map_chip_to_name(u32 chip, u32 chiprev,
 	strlcat(fw_name, mapping_table[i].fw, BRCMF_FW_NAME_LEN);
 	if ((nvram_name) && (mapping_table[i].nvram))
 		strlcat(nvram_name, mapping_table[i].nvram, BRCMF_FW_NAME_LEN);
+
+	brcmf_info("using %s for chip %#08x(%d) rev %#08x\n",
+		   fw_name, chip, chip, chiprev);
 
 	return 0;
 }

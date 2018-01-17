@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0 */
 #ifndef _PERF_UI_BROWSER_H_
 #define _PERF_UI_BROWSER_H_ 1
 
@@ -7,7 +8,7 @@
 #define HE_COLORSET_MEDIUM	51
 #define HE_COLORSET_NORMAL	52
 #define HE_COLORSET_SELECTED	53
-#define HE_COLORSET_CODE	54
+#define HE_COLORSET_JUMP_ARROWS	54
 #define HE_COLORSET_ADDR	55
 #define HE_COLORSET_ROOT	56
 
@@ -43,6 +44,8 @@ void ui_browser__printf(struct ui_browser *browser, const char *fmt, ...);
 void ui_browser__write_graph(struct ui_browser *browser, int graph);
 void __ui_browser__line_arrow(struct ui_browser *browser, unsigned int column,
 			      u64 start, u64 end);
+void ui_browser__mark_fused(struct ui_browser *browser, unsigned int column,
+			    unsigned int row, bool arrow_down);
 void __ui_browser__show_title(struct ui_browser *browser, const char *title);
 void ui_browser__show_title(struct ui_browser *browser, const char *title);
 int ui_browser__show(struct ui_browser *browser, const char *title,

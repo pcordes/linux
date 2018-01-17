@@ -1,9 +1,10 @@
+/* SPDX-License-Identifier: GPL-2.0 */
 #ifndef _ASM_UM_BARRIER_H_
 #define _ASM_UM_BARRIER_H_
 
 #include <asm/asm.h>
 #include <asm/segment.h>
-#include <asm/cpufeature.h>
+#include <asm/cpufeatures.h>
 #include <asm/cmpxchg.h>
 #include <asm/nops.h>
 

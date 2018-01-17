@@ -12,7 +12,6 @@
 #include <linux/dmi.h>
 #include <linux/slab.h>
 
-#include <asm-generic/pci-bridge.h>
 #include <asm/acpi.h>
 #include <asm/segment.h>
 #include <asm/io.h>
@@ -25,7 +24,6 @@ unsigned int pci_probe = PCI_PROBE_BIOS | PCI_PROBE_CONF1 | PCI_PROBE_CONF2 |
 
 unsigned int pci_early_dump_regs;
 static int pci_bf_sort;
-static int smbios_type_b1_flag;
 int pci_routeirq;
 int noioapicquirk;
 #ifdef CONFIG_X86_REROUTE_FOR_BROKEN_BOOT_IRQS
@@ -76,8 +74,8 @@ struct pci_ops pci_root_ops = {
 };
 
 /*
- * This interrupt-safe spinlock protects all accesses to PCI
- * configuration space.
+ * This interrupt-safe spinlock protects all accesses to PCI configuration
+ * space, except for the mmconfig (ECAM) based operations.
  */
 DEFINE_RAW_SPINLOCK(pci_config_lock);
 
@@ -134,7 +132,7 @@ static void pcibios_fixup_device_resources(struct pci_dev *dev)
 	if (pci_probe & PCI_NOASSIGN_BARS) {
 		/*
 		* If the BIOS did not assign the BAR, zero out the
-		* resource so the kernel doesn't attmept to assign
+		* resource so the kernel doesn't attempt to assign
 		* it later on in pci_assign_unassigned_resources
 		*/
 		for (bar = 0; bar <= PCI_STD_RESOURCE_END; bar++) {
@@ -198,34 +196,18 @@ static int __init set_bf_sort(const struct dmi_system_id *d)
 static void __init read_dmi_type_b1(const struct dmi_header *dm,
 				    void *private_data)
 {
-	u8 *d = (u8 *)dm + 4;
+	u8 *data = (u8 *)dm + 4;
 
 	if (dm->type != 0xB1)
 		return;
-	switch (((*(u32 *)d) >> 9) & 0x03) {
-	case 0x00:
-		printk(KERN_INFO "dmi type 0xB1 record - unknown flag\n");
-		break;
-	case 0x01: /* set pci=bfsort */
-		smbios_type_b1_flag = 1;
-		break;
-	case 0x02: /* do not set pci=bfsort */
-		smbios_type_b1_flag = 2;
-		break;
-	default:
-		break;
-	}
+	if ((((*(u32 *)data) >> 9) & 0x03) == 0x01)
+		set_bf_sort((const struct dmi_system_id *)private_data);
 }
 
 static int __init find_sort_method(const struct dmi_system_id *d)
 {
-	dmi_walk(read_dmi_type_b1, NULL);
-
-	if (smbios_type_b1_flag == 1) {
-		set_bf_sort(d);
-		return 0;
-	}
-	return -1;
+	dmi_walk(read_dmi_type_b1, (void *)d);
+	return 0;
 }
 
 /*
@@ -517,7 +499,7 @@ void __init pcibios_set_cache_line_size(void)
 
 int __init pcibios_init(void)
 {
-	if (!raw_pci_ops) {
+	if (!raw_pci_ops && !raw_pci_ext_ops) {
 		printk(KERN_WARNING "PCI: System does not support PCI\n");
 		return 0;
 	}
@@ -612,6 +594,11 @@ char *__init pcibios_setup(char *str)
 	} else if (!strcmp(str, "nocrs")) {
 		pci_probe |= PCI_ROOT_NO_CRS;
 		return NULL;
+#ifdef CONFIG_PHYS_ADDR_T_64BIT
+	} else if (!strcmp(str, "big_root_window")) {
+		pci_probe |= PCI_BIG_ROOT_WINDOW;
+		return NULL;
+#endif
 	} else if (!strcmp(str, "earlydump")) {
 		pci_early_dump_regs = 1;
 		return NULL;
@@ -668,7 +655,7 @@ static void set_dma_domain_ops(struct pci_dev *pdev)
 	spin_lock(&dma_domain_list_lock);
 	list_for_each_entry(domain, &dma_domain_list, node) {
 		if (pci_domain_nr(pdev->bus) == domain->domain_nr) {
-			pdev->dev.archdata.dma_ops = domain->dma_ops;
+			pdev->dev.dma_ops = domain->dma_ops;
 			break;
 		}
 	}
@@ -678,6 +665,12 @@ static void set_dma_domain_ops(struct pci_dev *pdev)
 static void set_dma_domain_ops(struct pci_dev *pdev) {}
 #endif
 
+static void set_dev_domain_options(struct pci_dev *pdev)
+{
+	if (is_vmd(pdev->bus))
+		pdev->hotplug_user_indicators = 1;
+}
+
 int pcibios_add_device(struct pci_dev *dev)
 {
 	struct setup_data *data;
@@ -686,7 +679,7 @@ int pcibios_add_device(struct pci_dev *dev)
 
 	pa_data = boot_params.hdr.setup_data;
 	while (pa_data) {
-		data = ioremap(pa_data, sizeof(*rom));
+		data = memremap(pa_data, sizeof(*rom), MEMREMAP_WB);
 		if (!data)
 			return -ENOMEM;
 
@@ -705,35 +698,39 @@ int pcibios_add_device(struct pci_dev *dev)
 			}
 		}
 		pa_data = data->next;
-		iounmap(data);
+		memunmap(data);
 	}
 	set_dma_domain_ops(dev);
+	set_dev_domain_options(dev);
 	return 0;
-}
-
-int pcibios_alloc_irq(struct pci_dev *dev)
-{
-	/*
-	 * If the PCI device was already claimed by core code and has
-	 * MSI enabled, probing of the pcibios IRQ will overwrite
-	 * dev->irq.  So bail out if MSI is already enabled.
-	 */
-	if (pci_dev_msi_enabled(dev))
-		return -EBUSY;
-
-	return pcibios_enable_irq(dev);
-}
-
-void pcibios_free_irq(struct pci_dev *dev)
-{
-	if (pcibios_disable_irq)
-		pcibios_disable_irq(dev);
 }
 
 int pcibios_enable_device(struct pci_dev *dev, int mask)
 {
-	return pci_enable_resources(dev, mask);
+	int err;
+
+	if ((err = pci_enable_resources(dev, mask)) < 0)
+		return err;
+
+	if (!pci_dev_msi_enabled(dev))
+		return pcibios_enable_irq(dev);
+	return 0;
 }
+
+void pcibios_disable_device (struct pci_dev *dev)
+{
+	if (!pci_dev_msi_enabled(dev) && pcibios_disable_irq)
+		pcibios_disable_irq(dev);
+}
+
+#ifdef CONFIG_ACPI_HOTPLUG_IOAPIC
+void pcibios_release_device(struct pci_dev *dev)
+{
+	if (atomic_dec_return(&dev->enable_cnt) >= 0)
+		pcibios_disable_device(dev);
+
+}
+#endif
 
 int pci_ext_cfg_avail(void)
 {

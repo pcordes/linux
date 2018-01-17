@@ -868,8 +868,7 @@ static int fill_ctrlset(struct zd_mac *mac,
 	unsigned int frag_len = skb->len + FCS_LEN;
 	unsigned int packet_length;
 	struct ieee80211_rate *txrate;
-	struct zd_ctrlset *cs = (struct zd_ctrlset *)
-		skb_push(skb, sizeof(struct zd_ctrlset));
+	struct zd_ctrlset *cs = skb_push(skb, sizeof(struct zd_ctrlset));
 	struct ieee80211_tx_info *info = IEEE80211_SKB_CB(skb);
 
 	ZD_ASSERT(frag_len <= 0xffff);
@@ -1068,7 +1067,7 @@ int zd_mac_rx(struct ieee80211_hw *hw, const u8 *buffer, unsigned int length)
 	}
 
 	stats.freq = zd_channels[_zd_chip_get_channel(&mac->chip) - 1].center_freq;
-	stats.band = IEEE80211_BAND_2GHZ;
+	stats.band = NL80211_BAND_2GHZ;
 	stats.signal = zd_check_signal(hw, status->signal_strength);
 
 	rate = zd_rx_rate(buffer, status);
@@ -1103,7 +1102,7 @@ int zd_mac_rx(struct ieee80211_hw *hw, const u8 *buffer, unsigned int length)
 	}
 
 	/* FIXME : could we avoid this big memcpy ? */
-	memcpy(skb_put(skb, length), buffer, length);
+	skb_put_data(skb, buffer, length);
 
 	memcpy(IEEE80211_SKB_RXCB(skb), &stats, sizeof(stats));
 	ieee80211_rx_irqsafe(hw, skb);
@@ -1395,7 +1394,7 @@ struct ieee80211_hw *zd_mac_alloc_hw(struct usb_interface *intf)
 	mac->band.n_channels = ARRAY_SIZE(zd_channels);
 	mac->band.channels = mac->channels;
 
-	hw->wiphy->bands[IEEE80211_BAND_2GHZ] = &mac->band;
+	hw->wiphy->bands[NL80211_BAND_2GHZ] = &mac->band;
 
 	ieee80211_hw_set(hw, MFP_CAPABLE);
 	ieee80211_hw_set(hw, HOST_BROADCAST_PS_BUFFERING);
@@ -1407,6 +1406,8 @@ struct ieee80211_hw *zd_mac_alloc_hw(struct usb_interface *intf)
 		BIT(NL80211_IFTYPE_STATION) |
 		BIT(NL80211_IFTYPE_ADHOC) |
 		BIT(NL80211_IFTYPE_AP);
+
+	wiphy_ext_feature_set(hw->wiphy, NL80211_EXT_FEATURE_CQM_RSSI_LIST);
 
 	hw->max_signal = 100;
 	hw->queues = 1;

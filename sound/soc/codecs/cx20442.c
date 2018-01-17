@@ -226,6 +226,7 @@ static int v253_open(struct tty_struct *tty)
 	if (!tty->disc_data)
 		return -ENODEV;
 
+	tty->receive_room = 16;
 	if (tty->ops->write(tty, v253_init, len) != len) {
 		ret = -EIO;
 		goto err;
@@ -397,7 +398,7 @@ static int cx20442_codec_remove(struct snd_soc_codec *codec)
 
 static const u8 cx20442_reg;
 
-static struct snd_soc_codec_driver cx20442_codec_dev = {
+static const struct snd_soc_codec_driver cx20442_codec_dev = {
 	.probe = 	cx20442_codec_probe,
 	.remove = 	cx20442_codec_remove,
 	.set_bias_level = cx20442_set_bias_level,
@@ -406,10 +407,12 @@ static struct snd_soc_codec_driver cx20442_codec_dev = {
 	.reg_word_size = sizeof(u8),
 	.read = cx20442_read_reg_cache,
 	.write = cx20442_write,
-	.dapm_widgets = cx20442_dapm_widgets,
-	.num_dapm_widgets = ARRAY_SIZE(cx20442_dapm_widgets),
-	.dapm_routes = cx20442_audio_map,
-	.num_dapm_routes = ARRAY_SIZE(cx20442_audio_map),
+	.component_driver = {
+		.dapm_widgets		= cx20442_dapm_widgets,
+		.num_dapm_widgets	= ARRAY_SIZE(cx20442_dapm_widgets),
+		.dapm_routes		= cx20442_audio_map,
+		.num_dapm_routes	= ARRAY_SIZE(cx20442_audio_map),
+	},
 };
 
 static int cx20442_platform_probe(struct platform_device *pdev)

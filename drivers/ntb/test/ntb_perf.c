@@ -58,6 +58,7 @@
 #include <linux/delay.h>
 #include <linux/sizes.h>
 #include <linux/ntb.h>
+#include <linux/mutex.h>
 
 #define DRIVER_NAME		"ntb_perf"
 #define DRIVER_DESCRIPTION	"PCIe NTB Performance Measurement Tool"
@@ -71,10 +72,11 @@
 #define MAX_THREADS		32
 #define MAX_TEST_SIZE		SZ_1M
 #define MAX_SRCS		32
-#define DMA_OUT_RESOURCE_TO	50
+#define DMA_OUT_RESOURCE_TO	msecs_to_jiffies(50)
 #define DMA_RETRIES		20
 #define SZ_4G			(1ULL << 32)
 #define MAX_SEG_ORDER		20 /* no larger than 1M for kmalloc buffer */
+#define PIDX			NTB_DEF_PEER_IDX
 
 MODULE_LICENSE(DRIVER_LICENSE);
 MODULE_VERSION(DRIVER_VERSION);
@@ -83,23 +85,29 @@ MODULE_DESCRIPTION(DRIVER_DESCRIPTION);
 
 static struct dentry *perf_debugfs_dir;
 
+static unsigned long max_mw_size;
+module_param(max_mw_size, ulong, 0644);
+MODULE_PARM_DESC(max_mw_size, "Limit size of large memory windows");
+
 static unsigned int seg_order = 19; /* 512K */
 module_param(seg_order, uint, 0644);
-MODULE_PARM_DESC(seg_order, "size order [n^2] of buffer segment for testing");
+MODULE_PARM_DESC(seg_order, "size order [2^n] of buffer segment for testing");
 
 static unsigned int run_order = 32; /* 4G */
 module_param(run_order, uint, 0644);
-MODULE_PARM_DESC(run_order, "size order [n^2] of total data to transfer");
+MODULE_PARM_DESC(run_order, "size order [2^n] of total data to transfer");
 
 static bool use_dma; /* default to 0 */
 module_param(use_dma, bool, 0644);
 MODULE_PARM_DESC(use_dma, "Using DMA engine to measure performance");
 
+static bool on_node = true; /* default to 1 */
+module_param(on_node, bool, 0644);
+MODULE_PARM_DESC(on_node, "Run threads only on NTB device node (default: true)");
+
 struct perf_mw {
 	phys_addr_t	phys_addr;
 	resource_size_t	phys_size;
-	resource_size_t	xlat_align;
-	resource_size_t	xlat_align_size;
 	void __iomem	*vbase;
 	size_t		xlat_size;
 	size_t		buf_size;
@@ -117,6 +125,10 @@ struct pthr_ctx {
 	int			dma_prep_err;
 	int			src_idx;
 	void			*srcs[MAX_SRCS];
+	wait_queue_head_t       *wq;
+	int			status;
+	u64			copied;
+	u64			diff_us;
 };
 
 struct perf_ctx {
@@ -124,23 +136,20 @@ struct perf_ctx {
 	spinlock_t		db_lock;
 	struct perf_mw		mw;
 	bool			link_is_up;
-	struct work_struct	link_cleanup;
 	struct delayed_work	link_work;
-	struct dentry		*debugfs_node_dir;
-	struct dentry		*debugfs_run;
-	struct dentry		*debugfs_threads;
+	wait_queue_head_t	link_wq;
 	u8			perf_threads;
-	bool			run;
+	/* mutex ensures only one set of threads run at once */
+	struct mutex		run_mutex;
 	struct pthr_ctx		pthr_ctx[MAX_THREADS];
 	atomic_t		tsync;
+	atomic_t                tdone;
 };
 
 enum {
 	VERSION = 0,
 	MW_SZ_HIGH,
 	MW_SZ_LOW,
-	SPAD_MSG,
-	SPAD_ACK,
 	MAX_SPAD
 };
 
@@ -148,10 +157,16 @@ static void perf_link_event(void *ctx)
 {
 	struct perf_ctx *perf = ctx;
 
-	if (ntb_link_is_up(perf->ntb, NULL, NULL) == 1)
+	if (ntb_link_is_up(perf->ntb, NULL, NULL) == 1) {
 		schedule_delayed_work(&perf->link_work, 2*HZ);
-	else
-		schedule_work(&perf->link_cleanup);
+	} else {
+		dev_dbg(&perf->ntb->pdev->dev, "link down\n");
+
+		if (!perf->link_is_up)
+			cancel_delayed_work_sync(&perf->link_work);
+
+		perf->link_is_up = false;
+	}
 }
 
 static void perf_db_event(void *ctx, int vec)
@@ -178,7 +193,7 @@ static void perf_copy_callback(void *data)
 	atomic_dec(&pctx->dma_sync);
 }
 
-static ssize_t perf_copy(struct pthr_ctx *pctx, char *dst,
+static ssize_t perf_copy(struct pthr_ctx *pctx, char __iomem *dst,
 			 char *src, size_t size)
 {
 	struct perf_ctx *perf = pctx->perf;
@@ -189,7 +204,8 @@ static ssize_t perf_copy(struct pthr_ctx *pctx, char *dst,
 	dma_cookie_t cookie;
 	size_t src_off, dst_off;
 	struct perf_mw *mw = &perf->mw;
-	u64 vbase, dst_vaddr;
+	void __iomem *vbase;
+	void __iomem *dst_vaddr;
 	dma_addr_t dst_phys;
 	int retries = 0;
 
@@ -204,14 +220,14 @@ static ssize_t perf_copy(struct pthr_ctx *pctx, char *dst,
 	}
 
 	device = chan->device;
-	src_off = (size_t)src & ~PAGE_MASK;
-	dst_off = (size_t)dst & ~PAGE_MASK;
+	src_off = (uintptr_t)src & ~PAGE_MASK;
+	dst_off = (uintptr_t __force)dst & ~PAGE_MASK;
 
 	if (!is_dma_copy_aligned(device, src_off, dst_off, size))
 		return -ENODEV;
 
-	vbase = (u64)(u64 *)mw->vbase;
-	dst_vaddr = (u64)(u64 *)dst;
+	vbase = mw->vbase;
+	dst_vaddr = dst;
 	dst_phys = mw->phys_addr + (dst_vaddr - vbase);
 
 	unmap = dmaengine_get_unmap_data(device->dev, 1, GFP_NOWAIT);
@@ -249,6 +265,8 @@ static ssize_t perf_copy(struct pthr_ctx *pctx, char *dst,
 	if (dma_submit_error(cookie))
 		goto err_set_unmap;
 
+	dmaengine_unmap_put(unmap);
+
 	atomic_inc(&pctx->dma_sync);
 	dma_async_issue_pending(chan);
 
@@ -261,15 +279,16 @@ err_get_unmap:
 	return 0;
 }
 
-static int perf_move_data(struct pthr_ctx *pctx, char *dst, char *src,
+static int perf_move_data(struct pthr_ctx *pctx, char __iomem *dst, char *src,
 			  u64 buf_size, u64 win_size, u64 total)
 {
 	int chunks, total_chunks, i;
 	int copied_chunks = 0;
 	u64 copied = 0, result;
-	char *tmp = dst;
+	char __iomem *tmp = dst;
 	u64 perf, diff_us;
 	ktime_t kstart, kstop, kdiff;
+	unsigned long last_sleep = jiffies;
 
 	chunks = div64_u64(win_size, buf_size);
 	total_chunks = div64_u64(total, buf_size);
@@ -285,36 +304,50 @@ static int perf_move_data(struct pthr_ctx *pctx, char *dst, char *src,
 		} else
 			tmp += buf_size;
 
-		/* Probably should schedule every 4GB to prevent soft hang. */
-		if (((copied % SZ_4G) == 0) && !use_dma) {
+		/* Probably should schedule every 5s to prevent soft hang. */
+		if (unlikely((jiffies - last_sleep) > 5 * HZ)) {
+			last_sleep = jiffies;
 			set_current_state(TASK_INTERRUPTIBLE);
 			schedule_timeout(1);
 		}
+
+		if (unlikely(kthread_should_stop()))
+			break;
 	}
 
 	if (use_dma) {
-		pr_info("%s: All DMA descriptors submitted\n", current->comm);
-		while (atomic_read(&pctx->dma_sync) != 0)
+		pr_debug("%s: All DMA descriptors submitted\n", current->comm);
+		while (atomic_read(&pctx->dma_sync) != 0) {
+			if (kthread_should_stop())
+				break;
 			msleep(20);
+		}
 	}
 
 	kstop = ktime_get();
 	kdiff = ktime_sub(kstop, kstart);
 	diff_us = ktime_to_us(kdiff);
 
-	pr_info("%s: copied %llu bytes\n", current->comm, copied);
+	pr_debug("%s: copied %llu bytes\n", current->comm, copied);
 
-	pr_info("%s: lasted %llu usecs\n", current->comm, diff_us);
+	pr_debug("%s: lasted %llu usecs\n", current->comm, diff_us);
 
 	perf = div64_u64(copied, diff_us);
 
-	pr_info("%s: MBytes/s: %llu\n", current->comm, perf);
+	pr_debug("%s: MBytes/s: %llu\n", current->comm, perf);
+
+	pctx->copied = copied;
+	pctx->diff_us = diff_us;
 
 	return 0;
 }
 
 static bool perf_dma_filter_fn(struct dma_chan *chan, void *node)
 {
+	/* Is the channel required to be on the same node as the device? */
+	if (!on_node)
+		return true;
+
 	return dev_to_node(&chan->dev->device) == (int)(unsigned long)node;
 }
 
@@ -324,15 +357,15 @@ static int ntb_perf_thread(void *data)
 	struct perf_ctx *perf = pctx->perf;
 	struct pci_dev *pdev = perf->ntb->pdev;
 	struct perf_mw *mw = &perf->mw;
-	char *dst;
+	char __iomem *dst;
 	u64 win_size, buf_size, total;
 	void *src;
 	int rc, node, i;
 	struct dma_chan *dma_chan = NULL;
 
-	pr_info("kthread %s starting...\n", current->comm);
+	pr_debug("kthread %s starting...\n", current->comm);
 
-	node = dev_to_node(&pdev->dev);
+	node = on_node ? dev_to_node(&pdev->dev) : NUMA_NO_NODE;
 
 	if (use_dma && !pctx->dma_chan) {
 		dma_cap_mask_t dma_mask;
@@ -364,7 +397,7 @@ static int ntb_perf_thread(void *data)
 	if (buf_size > MAX_TEST_SIZE)
 		buf_size = MAX_TEST_SIZE;
 
-	dst = (char *)mw->vbase;
+	dst = (char __iomem *)mw->vbase;
 
 	atomic_inc(&perf->tsync);
 	while (atomic_read(&perf->tsync) != perf->perf_threads)
@@ -388,7 +421,10 @@ static int ntb_perf_thread(void *data)
 		pctx->srcs[i] = NULL;
 	}
 
-	return 0;
+	atomic_inc(&perf->tdone);
+	wake_up(pctx->wq);
+	rc = 0;
+	goto done;
 
 err:
 	for (i = 0; i < MAX_SRCS; i++) {
@@ -401,6 +437,16 @@ err:
 		pctx->dma_chan = NULL;
 	}
 
+done:
+	/* Wait until we are told to stop */
+	for (;;) {
+		set_current_state(TASK_INTERRUPTIBLE);
+		if (kthread_should_stop())
+			break;
+		schedule();
+	}
+	__set_current_state(TASK_RUNNING);
+
 	return rc;
 }
 
@@ -412,7 +458,7 @@ static void perf_free_mw(struct perf_ctx *perf)
 	if (!mw->virt_addr)
 		return;
 
-	ntb_mw_clear_trans(perf->ntb, 0);
+	ntb_mw_clear_trans(perf->ntb, PIDX, 0);
 	dma_free_coherent(&pdev->dev, mw->buf_size,
 			  mw->virt_addr, mw->dma_addr);
 	mw->xlat_size = 0;
@@ -424,12 +470,20 @@ static int perf_set_mw(struct perf_ctx *perf, resource_size_t size)
 {
 	struct perf_mw *mw = &perf->mw;
 	size_t xlat_size, buf_size;
+	resource_size_t	xlat_align;
+	resource_size_t	xlat_align_size;
+	int rc;
 
 	if (!size)
 		return -EINVAL;
 
-	xlat_size = round_up(size, mw->xlat_align_size);
-	buf_size = round_up(size, mw->xlat_align);
+	rc = ntb_mw_get_align(perf->ntb, PIDX, 0, &xlat_align,
+			      &xlat_align_size, NULL);
+	if (rc)
+		return rc;
+
+	xlat_size = round_up(size, xlat_align_size);
+	buf_size = round_up(size, xlat_align);
 
 	if (mw->xlat_size == xlat_size)
 		return 0;
@@ -445,6 +499,13 @@ static int perf_set_mw(struct perf_ctx *perf, resource_size_t size)
 	if (!mw->virt_addr) {
 		mw->xlat_size = 0;
 		mw->buf_size = 0;
+	}
+
+	rc = ntb_mw_set_trans(perf->ntb, PIDX, 0, mw->dma_addr, mw->xlat_size);
+	if (rc) {
+		dev_err(&perf->ntb->dev, "Unable to set mw0 translation\n");
+		perf_free_mw(perf);
+		return -EIO;
 	}
 
 	return 0;
@@ -463,9 +524,13 @@ static void perf_link_work(struct work_struct *work)
 	dev_dbg(&perf->ntb->pdev->dev, "%s called\n", __func__);
 
 	size = perf->mw.phys_size;
-	ntb_peer_spad_write(ndev, MW_SZ_HIGH, upper_32_bits(size));
-	ntb_peer_spad_write(ndev, MW_SZ_LOW, lower_32_bits(size));
-	ntb_peer_spad_write(ndev, VERSION, PERF_VERSION);
+
+	if (max_mw_size && size > max_mw_size)
+		size = max_mw_size;
+
+	ntb_peer_spad_write(ndev, PIDX, MW_SZ_HIGH, upper_32_bits(size));
+	ntb_peer_spad_write(ndev, PIDX, MW_SZ_LOW, lower_32_bits(size));
+	ntb_peer_spad_write(ndev, PIDX, VERSION, PERF_VERSION);
 
 	/* now read what peer wrote */
 	val = ntb_spad_read(ndev, VERSION);
@@ -487,6 +552,7 @@ static void perf_link_work(struct work_struct *work)
 		goto out1;
 
 	perf->link_is_up = true;
+	wake_up(&perf->link_wq);
 
 	return;
 
@@ -499,18 +565,6 @@ out:
 				      msecs_to_jiffies(PERF_LINK_DOWN_TIMEOUT));
 }
 
-static void perf_link_cleanup(struct work_struct *work)
-{
-	struct perf_ctx *perf = container_of(work,
-					     struct perf_ctx,
-					     link_cleanup);
-
-	dev_dbg(&perf->ntb->pdev->dev, "%s called\n", __func__);
-
-	if (!perf->link_is_up)
-		cancel_delayed_work_sync(&perf->link_work);
-}
-
 static int perf_setup_mw(struct ntb_dev *ntb, struct perf_ctx *perf)
 {
 	struct perf_mw *mw;
@@ -518,8 +572,7 @@ static int perf_setup_mw(struct ntb_dev *ntb, struct perf_ctx *perf)
 
 	mw = &perf->mw;
 
-	rc = ntb_mw_get_range(ntb, 0, &mw->phys_addr, &mw->phys_size,
-			      &mw->xlat_align, &mw->xlat_align_size);
+	rc = ntb_peer_mw_get_addr(ntb, 0, &mw->phys_addr, &mw->phys_size);
 	if (rc)
 		return rc;
 
@@ -535,17 +588,69 @@ static ssize_t debugfs_run_read(struct file *filp, char __user *ubuf,
 {
 	struct perf_ctx *perf = filp->private_data;
 	char *buf;
-	ssize_t ret, out_offset;
+	ssize_t ret, out_off = 0;
+	struct pthr_ctx *pctx;
+	int i;
+	u64 rate;
 
 	if (!perf)
 		return 0;
 
-	buf = kmalloc(64, GFP_KERNEL);
-	out_offset = snprintf(buf, 64, "%d\n", perf->run);
-	ret = simple_read_from_buffer(ubuf, count, offp, buf, out_offset);
+	buf = kmalloc(1024, GFP_KERNEL);
+	if (!buf)
+		return -ENOMEM;
+
+	if (mutex_is_locked(&perf->run_mutex)) {
+		out_off = scnprintf(buf, 64, "running\n");
+		goto read_from_buf;
+	}
+
+	for (i = 0; i < MAX_THREADS; i++) {
+		pctx = &perf->pthr_ctx[i];
+
+		if (pctx->status == -ENODATA)
+			break;
+
+		if (pctx->status) {
+			out_off += scnprintf(buf + out_off, 1024 - out_off,
+					    "%d: error %d\n", i,
+					    pctx->status);
+			continue;
+		}
+
+		rate = div64_u64(pctx->copied, pctx->diff_us);
+		out_off += scnprintf(buf + out_off, 1024 - out_off,
+			"%d: copied %llu bytes in %llu usecs, %llu MBytes/s\n",
+			i, pctx->copied, pctx->diff_us, rate);
+	}
+
+read_from_buf:
+	ret = simple_read_from_buffer(ubuf, count, offp, buf, out_off);
 	kfree(buf);
 
 	return ret;
+}
+
+static void threads_cleanup(struct perf_ctx *perf)
+{
+	struct pthr_ctx *pctx;
+	int i;
+
+	for (i = 0; i < MAX_THREADS; i++) {
+		pctx = &perf->pthr_ctx[i];
+		if (pctx->thread) {
+			pctx->status = kthread_stop(pctx->thread);
+			pctx->thread = NULL;
+		}
+	}
+}
+
+static void perf_clear_thread_status(struct perf_ctx *perf)
+{
+	int i;
+
+	for (i = 0; i < MAX_THREADS; i++)
+		perf->pthr_ctx[i].status = -ENODATA;
 }
 
 static ssize_t debugfs_run_write(struct file *filp, const char __user *ubuf,
@@ -553,76 +658,70 @@ static ssize_t debugfs_run_write(struct file *filp, const char __user *ubuf,
 {
 	struct perf_ctx *perf = filp->private_data;
 	int node, i;
+	DECLARE_WAIT_QUEUE_HEAD(wq);
 
-	if (!perf->link_is_up)
-		return 0;
+	if (wait_event_interruptible(perf->link_wq, perf->link_is_up))
+		return -ENOLINK;
 
 	if (perf->perf_threads == 0)
-		return 0;
+		return -EINVAL;
 
-	if (atomic_read(&perf->tsync) == 0)
-		perf->run = false;
+	if (!mutex_trylock(&perf->run_mutex))
+		return -EBUSY;
 
-	if (perf->run) {
-		/* lets stop the threads */
-		perf->run = false;
-		for (i = 0; i < MAX_THREADS; i++) {
-			if (perf->pthr_ctx[i].thread) {
-				kthread_stop(perf->pthr_ctx[i].thread);
-				perf->pthr_ctx[i].thread = NULL;
-			} else
-				break;
-		}
-	} else {
-		perf->run = true;
+	perf_clear_thread_status(perf);
 
-		if (perf->perf_threads > MAX_THREADS) {
-			perf->perf_threads = MAX_THREADS;
-			pr_info("Reset total threads to: %u\n", MAX_THREADS);
-		}
-
-		/* no greater than 1M */
-		if (seg_order > MAX_SEG_ORDER) {
-			seg_order = MAX_SEG_ORDER;
-			pr_info("Fix seg_order to %u\n", seg_order);
-		}
-
-		if (run_order < seg_order) {
-			run_order = seg_order;
-			pr_info("Fix run_order to %u\n", run_order);
-		}
-
-		node = dev_to_node(&perf->ntb->pdev->dev);
-		/* launch kernel thread */
-		for (i = 0; i < perf->perf_threads; i++) {
-			struct pthr_ctx *pctx;
-
-			pctx = &perf->pthr_ctx[i];
-			atomic_set(&pctx->dma_sync, 0);
-			pctx->perf = perf;
-			pctx->thread =
-				kthread_create_on_node(ntb_perf_thread,
-						       (void *)pctx,
-						       node, "ntb_perf %d", i);
-			if (pctx->thread)
-				wake_up_process(pctx->thread);
-			else {
-				perf->run = false;
-				for (i = 0; i < MAX_THREADS; i++) {
-					if (pctx->thread) {
-						kthread_stop(pctx->thread);
-						pctx->thread = NULL;
-					}
-				}
-			}
-
-			if (perf->run == false)
-				return -ENXIO;
-		}
-
+	if (perf->perf_threads > MAX_THREADS) {
+		perf->perf_threads = MAX_THREADS;
+		pr_info("Reset total threads to: %u\n", MAX_THREADS);
 	}
 
+	/* no greater than 1M */
+	if (seg_order > MAX_SEG_ORDER) {
+		seg_order = MAX_SEG_ORDER;
+		pr_info("Fix seg_order to %u\n", seg_order);
+	}
+
+	if (run_order < seg_order) {
+		run_order = seg_order;
+		pr_info("Fix run_order to %u\n", run_order);
+	}
+
+	node = on_node ? dev_to_node(&perf->ntb->pdev->dev)
+		       : NUMA_NO_NODE;
+	atomic_set(&perf->tdone, 0);
+
+	/* launch kernel thread */
+	for (i = 0; i < perf->perf_threads; i++) {
+		struct pthr_ctx *pctx;
+
+		pctx = &perf->pthr_ctx[i];
+		atomic_set(&pctx->dma_sync, 0);
+		pctx->perf = perf;
+		pctx->wq = &wq;
+		pctx->thread =
+			kthread_create_on_node(ntb_perf_thread,
+					       (void *)pctx,
+					       node, "ntb_perf %d", i);
+		if (IS_ERR(pctx->thread)) {
+			pctx->thread = NULL;
+			goto err;
+		} else {
+			wake_up_process(pctx->thread);
+		}
+	}
+
+	wait_event_interruptible(wq,
+		atomic_read(&perf->tdone) == perf->perf_threads);
+
+	threads_cleanup(perf);
+	mutex_unlock(&perf->run_mutex);
 	return count;
+
+err:
+	threads_cleanup(perf);
+	mutex_unlock(&perf->run_mutex);
+	return -ENXIO;
 }
 
 static const struct file_operations ntb_perf_debugfs_run = {
@@ -635,34 +734,71 @@ static const struct file_operations ntb_perf_debugfs_run = {
 static int perf_debugfs_setup(struct perf_ctx *perf)
 {
 	struct pci_dev *pdev = perf->ntb->pdev;
+	struct dentry *debugfs_node_dir;
+	struct dentry *debugfs_run;
+	struct dentry *debugfs_threads;
+	struct dentry *debugfs_seg_order;
+	struct dentry *debugfs_run_order;
+	struct dentry *debugfs_use_dma;
+	struct dentry *debugfs_on_node;
 
 	if (!debugfs_initialized())
 		return -ENODEV;
 
+	/* Assumpion: only one NTB device in the system */
 	if (!perf_debugfs_dir) {
 		perf_debugfs_dir = debugfs_create_dir(KBUILD_MODNAME, NULL);
 		if (!perf_debugfs_dir)
 			return -ENODEV;
 	}
 
-	perf->debugfs_node_dir = debugfs_create_dir(pci_name(pdev),
-						    perf_debugfs_dir);
-	if (!perf->debugfs_node_dir)
-		return -ENODEV;
+	debugfs_node_dir = debugfs_create_dir(pci_name(pdev),
+					      perf_debugfs_dir);
+	if (!debugfs_node_dir)
+		goto err;
 
-	perf->debugfs_run = debugfs_create_file("run", S_IRUSR | S_IWUSR,
-						perf->debugfs_node_dir, perf,
-						&ntb_perf_debugfs_run);
-	if (!perf->debugfs_run)
-		return -ENODEV;
+	debugfs_run = debugfs_create_file("run", S_IRUSR | S_IWUSR,
+					  debugfs_node_dir, perf,
+					  &ntb_perf_debugfs_run);
+	if (!debugfs_run)
+		goto err;
 
-	perf->debugfs_threads = debugfs_create_u8("threads", S_IRUSR | S_IWUSR,
-						  perf->debugfs_node_dir,
-						  &perf->perf_threads);
-	if (!perf->debugfs_threads)
-		return -ENODEV;
+	debugfs_threads = debugfs_create_u8("threads", S_IRUSR | S_IWUSR,
+					    debugfs_node_dir,
+					    &perf->perf_threads);
+	if (!debugfs_threads)
+		goto err;
+
+	debugfs_seg_order = debugfs_create_u32("seg_order", 0600,
+					       debugfs_node_dir,
+					       &seg_order);
+	if (!debugfs_seg_order)
+		goto err;
+
+	debugfs_run_order = debugfs_create_u32("run_order", 0600,
+					       debugfs_node_dir,
+					       &run_order);
+	if (!debugfs_run_order)
+		goto err;
+
+	debugfs_use_dma = debugfs_create_bool("use_dma", 0600,
+					       debugfs_node_dir,
+					       &use_dma);
+	if (!debugfs_use_dma)
+		goto err;
+
+	debugfs_on_node = debugfs_create_bool("on_node", 0600,
+					      debugfs_node_dir,
+					      &on_node);
+	if (!debugfs_on_node)
+		goto err;
 
 	return 0;
+
+err:
+	debugfs_remove_recursive(perf_debugfs_dir);
+	perf_debugfs_dir = NULL;
+	return -ENODEV;
 }
 
 static int perf_probe(struct ntb_client *client, struct ntb_dev *ntb)
@@ -672,8 +808,21 @@ static int perf_probe(struct ntb_client *client, struct ntb_dev *ntb)
 	int node;
 	int rc = 0;
 
-	node = dev_to_node(&pdev->dev);
+	if (ntb_spad_count(ntb) < MAX_SPAD) {
+		dev_err(&ntb->dev, "Not enough scratch pad registers for %s",
+			DRIVER_NAME);
+		return -EIO;
+	}
 
+	if (!ntb->ops->mw_set_trans) {
+		dev_err(&ntb->dev, "Need inbound MW based NTB API\n");
+		return -EINVAL;
+	}
+
+	if (ntb_peer_port_count(ntb) != NTB_DEF_PEER_CNT)
+		dev_warn(&ntb->dev, "Multi-port NTB devices unsupported\n");
+
+	node = on_node ? dev_to_node(&pdev->dev) : NUMA_NO_NODE;
 	perf = kzalloc_node(sizeof(*perf), GFP_KERNEL, node);
 	if (!perf) {
 		rc = -ENOMEM;
@@ -683,11 +832,11 @@ static int perf_probe(struct ntb_client *client, struct ntb_dev *ntb)
 	perf->ntb = ntb;
 	perf->perf_threads = 1;
 	atomic_set(&perf->tsync, 0);
-	perf->run = false;
+	mutex_init(&perf->run_mutex);
 	spin_lock_init(&perf->db_lock);
 	perf_setup_mw(ntb, perf);
+	init_waitqueue_head(&perf->link_wq);
 	INIT_DELAYED_WORK(&perf->link_work, perf_link_work);
-	INIT_WORK(&perf->link_cleanup, perf_link_cleanup);
 
 	rc = ntb_set_ctx(ntb, perf, &perf_ops);
 	if (rc)
@@ -701,11 +850,12 @@ static int perf_probe(struct ntb_client *client, struct ntb_dev *ntb)
 	if (rc)
 		goto err_ctx;
 
+	perf_clear_thread_status(perf);
+
 	return 0;
 
 err_ctx:
 	cancel_delayed_work_sync(&perf->link_work);
-	cancel_work_sync(&perf->link_cleanup);
 	kfree(perf);
 err_perf:
 	return rc;
@@ -718,8 +868,9 @@ static void perf_remove(struct ntb_client *client, struct ntb_dev *ntb)
 
 	dev_dbg(&perf->ntb->dev, "%s called\n", __func__);
 
+	mutex_lock(&perf->run_mutex);
+
 	cancel_delayed_work_sync(&perf->link_work);
-	cancel_work_sync(&perf->link_cleanup);
 
 	ntb_clear_ctx(ntb);
 	ntb_link_disable(ntb);

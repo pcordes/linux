@@ -1043,7 +1043,7 @@ static int powernowk8_cpu_init(struct cpufreq_policy *pol)
 
 	data = kzalloc(sizeof(*data), GFP_KERNEL);
 	if (!data) {
-		pr_err("unable to alloc powernow_k8_data");
+		pr_err("unable to alloc powernow_k8_data\n");
 		return -ENOMEM;
 	}
 
@@ -1171,7 +1171,8 @@ static struct cpufreq_driver cpufreq_amd64_driver = {
 
 static void __request_acpi_cpufreq(void)
 {
-	const char *cur_drv, *drv = "acpi-cpufreq";
+	const char drv[] = "acpi-cpufreq";
+	const char *cur_drv;
 
 	cur_drv = cpufreq_get_current_driver();
 	if (!cur_drv)

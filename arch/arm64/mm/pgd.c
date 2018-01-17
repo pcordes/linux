@@ -26,9 +26,7 @@
 #include <asm/page.h>
 #include <asm/tlbflush.h>
 
-#include "mm.h"
-
-static struct kmem_cache *pgd_cache;
+static struct kmem_cache *pgd_cache __ro_after_init;
 
 pgd_t *pgd_alloc(struct mm_struct *mm)
 {

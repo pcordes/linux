@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0
 /*
  * ARM Ltd. Versatile Express
  *
@@ -93,7 +94,7 @@
 		compatible = "arm,vexpress,config-bus";
 		arm,vexpress,config-bridge = <&v2m_sysreg>;
 
-		smbclk: osc@4 {
+		smbclk: smclk {
 			/* SMC clock */
 			compatible = "arm,vexpress-osc";
 			arm,vexpress-sysreg,func = <1 4>;
@@ -102,7 +103,7 @@
 			clock-output-names = "smclk";
 		};
 
-		volt@0 {
+		volt-vio {
 			/* VIO to expansion board above */
 			compatible = "arm,vexpress-volt";
 			arm,vexpress-sysreg,func = <2 0>;
@@ -112,7 +113,7 @@
 			regulator-always-on;
 		};
 
-		volt@1 {
+		volt-12v {
 			/* 12V from power connector J6 */
 			compatible = "arm,vexpress-volt";
 			arm,vexpress-sysreg,func = <2 1>;
@@ -120,7 +121,7 @@
 			regulator-always-on;
 		};
 
-		temp@0 {
+		temp-fpga {
 			/* FPGA temperature */
 			compatible = "arm,vexpress-temp";
 			arm,vexpress-sysreg,func = <4 0>;
@@ -128,7 +129,7 @@
 		};
 	};
 
-	smb {
+	smb@8000000 {
 		compatible = "simple-bus";
 
 		#address-cells = <2>;

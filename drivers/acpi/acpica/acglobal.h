@@ -5,7 +5,7 @@
  *****************************************************************************/
 
 /*
- * Copyright (C) 2000 - 2016, Intel Corp.
+ * Copyright (C) 2000 - 2017, Intel Corp.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -165,7 +165,7 @@ ACPI_GLOBAL(u8, acpi_gbl_next_owner_id_offset);
 
 /* Initialization sequencing */
 
-ACPI_INIT_GLOBAL(u8, acpi_gbl_reg_methods_enabled, FALSE);
+ACPI_INIT_GLOBAL(u8, acpi_gbl_namespace_initialized, FALSE);
 
 /* Misc */
 
@@ -187,6 +187,8 @@ extern const char *acpi_gbl_sleep_state_names[ACPI_S_STATE_COUNT];
 extern const char *acpi_gbl_lowest_dstate_names[ACPI_NUM_sx_w_METHODS];
 extern const char *acpi_gbl_highest_dstate_names[ACPI_NUM_sx_d_METHODS];
 extern const char *acpi_gbl_region_types[ACPI_NUM_PREDEFINED_REGIONS];
+extern const char acpi_gbl_lower_hex_digits[];
+extern const char acpi_gbl_upper_hex_digits[];
 extern const struct acpi_opcode_info acpi_gbl_aml_op_info[AML_NUM_OPCODES];
 
 #ifdef ACPI_DBG_TRACK_ALLOCATIONS
@@ -237,10 +239,6 @@ ACPI_INIT_GLOBAL(u32, acpi_gbl_nesting_level, 0);
  ****************************************************************************/
 
 ACPI_GLOBAL(struct acpi_thread_state *, acpi_gbl_current_walk_list);
-
-/* Maximum number of While() loop iterations before forced abort */
-
-ACPI_GLOBAL(u16, acpi_gbl_max_loop_iterations);
 
 /* Control method single step flag */
 
@@ -315,6 +313,9 @@ ACPI_INIT_GLOBAL(u8, acpi_gbl_ignore_noop_operator, FALSE);
 ACPI_INIT_GLOBAL(u8, acpi_gbl_cstyle_disassembly, TRUE);
 ACPI_INIT_GLOBAL(u8, acpi_gbl_force_aml_disassembly, FALSE);
 ACPI_INIT_GLOBAL(u8, acpi_gbl_dm_opt_verbose, TRUE);
+ACPI_INIT_GLOBAL(u8, acpi_gbl_dm_emit_external_opcodes, FALSE);
+ACPI_INIT_GLOBAL(u8, acpi_gbl_do_disassembler_optimizations, TRUE);
+ACPI_INIT_GLOBAL(ACPI_PARSE_OBJECT_LIST, *acpi_gbl_temp_list_head, NULL);
 
 ACPI_GLOBAL(u8, acpi_gbl_dm_opt_disasm);
 ACPI_GLOBAL(u8, acpi_gbl_dm_opt_listing);
@@ -361,6 +362,70 @@ ACPI_GLOBAL(u32, acpi_gbl_num_objects);
 
 #endif				/* ACPI_DEBUGGER */
 
+#if defined (ACPI_DISASSEMBLER) || defined (ACPI_ASL_COMPILER)
+
+ACPI_GLOBAL(const char, *acpi_gbl_pld_panel_list[]);
+ACPI_GLOBAL(const char, *acpi_gbl_pld_vertical_position_list[]);
+ACPI_GLOBAL(const char, *acpi_gbl_pld_horizontal_position_list[]);
+ACPI_GLOBAL(const char, *acpi_gbl_pld_shape_list[]);
+
+ACPI_INIT_GLOBAL(u8, acpi_gbl_disasm_flag, FALSE);
+
+#endif
+
+/*
+ * Meant for the -ca option.
+ */
+ACPI_INIT_GLOBAL(char *, acpi_gbl_current_inline_comment, NULL);
+ACPI_INIT_GLOBAL(char *, acpi_gbl_current_end_node_comment, NULL);
+ACPI_INIT_GLOBAL(char *, acpi_gbl_current_open_brace_comment, NULL);
+ACPI_INIT_GLOBAL(char *, acpi_gbl_current_close_brace_comment, NULL);
+
+ACPI_INIT_GLOBAL(char *, acpi_gbl_root_filename, NULL);
+ACPI_INIT_GLOBAL(char *, acpi_gbl_current_filename, NULL);
+ACPI_INIT_GLOBAL(char *, acpi_gbl_current_parent_filename, NULL);
+ACPI_INIT_GLOBAL(char *, acpi_gbl_current_include_filename, NULL);
+
+ACPI_INIT_GLOBAL(struct acpi_comment_node, *acpi_gbl_last_list_head, NULL);
+
+ACPI_INIT_GLOBAL(struct acpi_comment_node, *acpi_gbl_def_blk_comment_list_head,
+		 NULL);
+ACPI_INIT_GLOBAL(struct acpi_comment_node, *acpi_gbl_def_blk_comment_list_tail,
+		 NULL);
+
+ACPI_INIT_GLOBAL(struct acpi_comment_node, *acpi_gbl_reg_comment_list_head,
+		 NULL);
+ACPI_INIT_GLOBAL(struct acpi_comment_node, *acpi_gbl_reg_comment_list_tail,
+		 NULL);
+
+ACPI_INIT_GLOBAL(struct acpi_comment_node, *acpi_gbl_inc_comment_list_head,
+		 NULL);
+ACPI_INIT_GLOBAL(struct acpi_comment_node, *acpi_gbl_inc_comment_list_tail,
+		 NULL);
+
+ACPI_INIT_GLOBAL(struct acpi_comment_node, *acpi_gbl_end_blk_comment_list_head,
+		 NULL);
+ACPI_INIT_GLOBAL(struct acpi_comment_node, *acpi_gbl_end_blk_comment_list_tail,
+		 NULL);
+
+ACPI_INIT_GLOBAL(struct acpi_comment_addr_node,
+		 *acpi_gbl_comment_addr_list_head, NULL);
+
+ACPI_INIT_GLOBAL(union acpi_parse_object, *acpi_gbl_current_scope, NULL);
+
+ACPI_INIT_GLOBAL(struct acpi_file_node, *acpi_gbl_file_tree_root, NULL);
+
+ACPI_GLOBAL(acpi_cache_t *, acpi_gbl_reg_comment_cache);
+ACPI_GLOBAL(acpi_cache_t *, acpi_gbl_comment_addr_cache);
+ACPI_GLOBAL(acpi_cache_t *, acpi_gbl_file_cache);
+
+ACPI_INIT_GLOBAL(u8, gbl_capture_comments, FALSE);
+
+ACPI_INIT_GLOBAL(u8, acpi_gbl_debug_asl_conversion, FALSE);
+ACPI_INIT_GLOBAL(ACPI_FILE, acpi_gbl_conv_debug_file, NULL);
+
+ACPI_GLOBAL(char, acpi_gbl_table_sig[4]);
+
 /*****************************************************************************
  *
  * Application globals
@@ -371,6 +436,7 @@ ACPI_GLOBAL(u32, acpi_gbl_num_objects);
 
 ACPI_INIT_GLOBAL(ACPI_FILE, acpi_gbl_debug_file, NULL);
 ACPI_INIT_GLOBAL(ACPI_FILE, acpi_gbl_output_file, NULL);
+ACPI_INIT_GLOBAL(u8, acpi_gbl_debug_timeout, FALSE);
 
 /* Print buffer */
 

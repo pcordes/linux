@@ -42,7 +42,6 @@
 
 #define MAX_TRACE_ARGS		128
 #define MAX_ARGSTR_LEN		63
-#define MAX_EVENT_NAME_LEN	64
 #define MAX_STRING_SIZE		PATH_MAX
 
 /* Reserved field names */
@@ -102,6 +101,7 @@ enum {
 	FETCH_MTD_reg = 0,
 	FETCH_MTD_stack,
 	FETCH_MTD_retval,
+	FETCH_MTD_comm,
 	FETCH_MTD_memory,
 	FETCH_MTD_symbol,
 	FETCH_MTD_deref,
@@ -148,6 +148,11 @@ DECLARE_BASIC_PRINT_TYPE_FUNC(s8);
 DECLARE_BASIC_PRINT_TYPE_FUNC(s16);
 DECLARE_BASIC_PRINT_TYPE_FUNC(s32);
 DECLARE_BASIC_PRINT_TYPE_FUNC(s64);
+DECLARE_BASIC_PRINT_TYPE_FUNC(x8);
+DECLARE_BASIC_PRINT_TYPE_FUNC(x16);
+DECLARE_BASIC_PRINT_TYPE_FUNC(x32);
+DECLARE_BASIC_PRINT_TYPE_FUNC(x64);
+
 DECLARE_BASIC_PRINT_TYPE_FUNC(string);
 
 #define FETCH_FUNC_NAME(method, type)	fetch_##method##_##type
@@ -183,6 +188,14 @@ DECLARE_BASIC_FETCH_FUNCS(bitfield);
 #define fetch_bitfield_string			NULL
 #define fetch_bitfield_string_size		NULL
 
+/* comm only makes sense as a string */
+#define fetch_comm_u8		NULL
+#define fetch_comm_u16		NULL
+#define fetch_comm_u32		NULL
+#define fetch_comm_u64		NULL
+DECLARE_FETCH_FUNC(comm, string);
+DECLARE_FETCH_FUNC(comm, string_size);
+
 /*
  * Define macro for basic types - we don't need to define s* types, because
  * we have to care only about bitwidth at recording time.
@@ -194,7 +207,7 @@ DEFINE_FETCH_##method(u32)		\
 DEFINE_FETCH_##method(u64)
 
 /* Default (unsigned long) fetch type */
-#define __DEFAULT_FETCH_TYPE(t) u##t
+#define __DEFAULT_FETCH_TYPE(t) x##t
 #define _DEFAULT_FETCH_TYPE(t) __DEFAULT_FETCH_TYPE(t)
 #define DEFAULT_FETCH_TYPE _DEFAULT_FETCH_TYPE(BITS_PER_LONG)
 #define DEFAULT_FETCH_TYPE_STR __stringify(DEFAULT_FETCH_TYPE)
@@ -213,6 +226,7 @@ DEFINE_FETCH_##method(u64)
 ASSIGN_FETCH_FUNC(reg, ftype),				\
 ASSIGN_FETCH_FUNC(stack, ftype),			\
 ASSIGN_FETCH_FUNC(retval, ftype),			\
+ASSIGN_FETCH_FUNC(comm, ftype),				\
 ASSIGN_FETCH_FUNC(memory, ftype),			\
 ASSIGN_FETCH_FUNC(symbol, ftype),			\
 ASSIGN_FETCH_FUNC(deref, ftype),			\
@@ -224,12 +238,16 @@ ASSIGN_FETCH_FUNC(file_offset, ftype),			\
 #define ASSIGN_FETCH_TYPE(ptype, ftype, sign)			\
 	__ASSIGN_FETCH_TYPE(#ptype, ptype, ftype, sizeof(ftype), sign, #ptype)
 
+/* If ptype is an alias of atype, use this macro (show atype in format) */
+#define ASSIGN_FETCH_TYPE_ALIAS(ptype, atype, ftype, sign)		\
+	__ASSIGN_FETCH_TYPE(#ptype, ptype, ftype, sizeof(ftype), sign, #atype)
+
 #define ASSIGN_FETCH_TYPE_END {}
 
 #define FETCH_TYPE_STRING	0
 #define FETCH_TYPE_STRSIZE	1
 
-#ifdef CONFIG_KPROBE_EVENT
+#ifdef CONFIG_KPROBE_EVENTS
 struct symbol_cache;
 unsigned long update_symbol_cache(struct symbol_cache *sc);
 void free_symbol_cache(struct symbol_cache *sc);
@@ -259,7 +277,7 @@ alloc_symbol_cache(const char *sym, long offset)
 {
 	return NULL;
 }
-#endif /* CONFIG_KPROBE_EVENT */
+#endif /* CONFIG_KPROBE_EVENTS */
 
 struct probe_arg {
 	struct fetch_param	fetch;
@@ -336,12 +354,6 @@ extern void traceprobe_update_arg(struct probe_arg *arg);
 extern void traceprobe_free_probe_arg(struct probe_arg *arg);
 
 extern int traceprobe_split_symbol_offset(char *symbol, unsigned long *offset);
-
-extern ssize_t traceprobe_probes_write(struct file *file,
-		const char __user *buffer, size_t count, loff_t *ppos,
-		int (*createfn)(int, char**));
-
-extern int traceprobe_command(const char *buf, int (*createfn)(int, char**));
 
 /* Sum up total data length for dynamic arraies (strings) */
 static nokprobe_inline int

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0
 #include <linux/types.h>
 #include <linux/kernel.h>
 #include <linux/irq.h>
@@ -163,7 +164,9 @@ static struct irq_chip ics_rtas_irq_chip = {
 	.irq_mask = ics_rtas_mask_irq,
 	.irq_unmask = ics_rtas_unmask_irq,
 	.irq_eoi = NULL, /* Patched at init time */
-	.irq_set_affinity = ics_rtas_set_affinity
+	.irq_set_affinity = ics_rtas_set_affinity,
+	.irq_set_type = xics_set_irq_type,
+	.irq_retrigger = xics_retrigger,
 };
 
 static int ics_rtas_map(struct ics *ics, unsigned int virq)

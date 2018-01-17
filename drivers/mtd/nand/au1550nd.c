@@ -14,7 +14,7 @@
 #include <linux/module.h>
 #include <linux/interrupt.h>
 #include <linux/mtd/mtd.h>
-#include <linux/mtd/nand.h>
+#include <linux/mtd/rawnand.h>
 #include <linux/mtd/partitions.h>
 #include <linux/platform_device.h>
 #include <asm/io.h>
@@ -331,8 +331,7 @@ static void au1550_command(struct mtd_info *mtd, unsigned command, int column, i
 
 			ctx->write_byte(mtd, (u8)(page_addr >> 8));
 
-			/* One more address cycle for devices > 32MiB */
-			if (this->chipsize > (32 << 20))
+			if (this->options & NAND_ROW_ADDR_3)
 				ctx->write_byte(mtd,
 						((page_addr >> 16) & 0x0f));
 		}
@@ -459,6 +458,7 @@ static int au1550nd_probe(struct platform_device *pdev)
 	/* 30 us command delay time */
 	this->chip_delay = 30;
 	this->ecc.mode = NAND_ECC_SOFT;
+	this->ecc.algo = NAND_ECC_HAMMING;
 
 	if (pd->devwidth)
 		this->options |= NAND_BUSWIDTH_16;

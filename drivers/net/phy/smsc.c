@@ -20,9 +20,20 @@
 #include <linux/module.h>
 #include <linux/mii.h>
 #include <linux/ethtool.h>
+#include <linux/of.h>
 #include <linux/phy.h>
 #include <linux/netdevice.h>
 #include <linux/smscphy.h>
+
+struct smsc_hw_stat {
+	const char *string;
+	u8 reg;
+	u8 bits;
+};
+
+static struct smsc_hw_stat smsc_hw_stats[] = {
+	{ "phy_symbol_errors", 26, 16},
+};
 
 struct smsc_phy_priv {
 	bool energy_enable;
@@ -75,22 +86,13 @@ static int smsc_phy_reset(struct phy_device *phydev)
 	 * in all capable mode before using it.
 	 */
 	if ((rc & MII_LAN83C185_MODE_MASK) == MII_LAN83C185_MODE_POWERDOWN) {
-		int timeout = 50000;
-
-		/* set "all capable" mode and reset the phy */
+		/* set "all capable" mode */
 		rc |= MII_LAN83C185_MODE_ALL;
 		phy_write(phydev, MII_LAN83C185_SPECIAL_MODES, rc);
-		phy_write(phydev, MII_BMCR, BMCR_RESET);
-
-		/* wait end of reset (max 500 ms) */
-		do {
-			udelay(10);
-			if (timeout-- == 0)
-				return -1;
-			rc = phy_read(phydev, MII_BMCR);
-		} while (rc & BMCR_RESET);
 	}
-	return 0;
+
+	/* reset the phy */
+	return genphy_soft_reset(phydev);
 }
 
 static int lan911x_config_init(struct phy_device *phydev)
@@ -151,6 +153,48 @@ static int lan87xx_read_status(struct phy_device *phydev)
 	return err;
 }
 
+static int smsc_get_sset_count(struct phy_device *phydev)
+{
+	return ARRAY_SIZE(smsc_hw_stats);
+}
+
+static void smsc_get_strings(struct phy_device *phydev, u8 *data)
+{
+	int i;
+
+	for (i = 0; i < ARRAY_SIZE(smsc_hw_stats); i++) {
+		strncpy(data + i * ETH_GSTRING_LEN,
+		       smsc_hw_stats[i].string, ETH_GSTRING_LEN);
+	}
+}
+
+#ifndef UINT64_MAX
+#define UINT64_MAX              (u64)(~((u64)0))
+#endif
+static u64 smsc_get_stat(struct phy_device *phydev, int i)
+{
+	struct smsc_hw_stat stat = smsc_hw_stats[i];
+	int val;
+	u64 ret;
+
+	val = phy_read(phydev, stat.reg);
+	if (val < 0)
+		ret = UINT64_MAX;
+	else
+		ret = val;
+
+	return ret;
+}
+
+static void smsc_get_stats(struct phy_device *phydev,
+			   struct ethtool_stats *stats, u64 *data)
+{
+	int i;
+
+	for (i = 0; i < ARRAY_SIZE(smsc_hw_stats); i++)
+		data[i] = smsc_get_stat(phydev, i);
+}
+
 static int smsc_phy_probe(struct phy_device *phydev)
 {
 	struct device *dev = &phydev->mdio.dev;
@@ -177,9 +221,8 @@ static struct phy_driver smsc_phy_driver[] = {
 	.phy_id_mask	= 0xfffffff0,
 	.name		= "SMSC LAN83C185",
 
-	.features	= (PHY_BASIC_FEATURES | SUPPORTED_Pause
-				| SUPPORTED_Asym_Pause),
-	.flags		= PHY_HAS_INTERRUPT | PHY_HAS_MAGICANEG,
+	.features	= PHY_BASIC_FEATURES,
+	.flags		= PHY_HAS_INTERRUPT,
 
 	.probe		= smsc_phy_probe,
 
@@ -200,9 +243,8 @@ static struct phy_driver smsc_phy_driver[] = {
 	.phy_id_mask	= 0xfffffff0,
 	.name		= "SMSC LAN8187",
 
-	.features	= (PHY_BASIC_FEATURES | SUPPORTED_Pause
-				| SUPPORTED_Asym_Pause),
-	.flags		= PHY_HAS_INTERRUPT | PHY_HAS_MAGICANEG,
+	.features	= PHY_BASIC_FEATURES,
+	.flags		= PHY_HAS_INTERRUPT,
 
 	.probe		= smsc_phy_probe,
 
@@ -216,6 +258,11 @@ static struct phy_driver smsc_phy_driver[] = {
 	.ack_interrupt	= smsc_phy_ack_interrupt,
 	.config_intr	= smsc_phy_config_intr,
 
+	/* Statistics */
+	.get_sset_count = smsc_get_sset_count,
+	.get_strings	= smsc_get_strings,
+	.get_stats	= smsc_get_stats,
+
 	.suspend	= genphy_suspend,
 	.resume		= genphy_resume,
 }, {
@@ -223,9 +270,8 @@ static struct phy_driver smsc_phy_driver[] = {
 	.phy_id_mask	= 0xfffffff0,
 	.name		= "SMSC LAN8700",
 
-	.features	= (PHY_BASIC_FEATURES | SUPPORTED_Pause
-				| SUPPORTED_Asym_Pause),
-	.flags		= PHY_HAS_INTERRUPT | PHY_HAS_MAGICANEG,
+	.features	= PHY_BASIC_FEATURES,
+	.flags		= PHY_HAS_INTERRUPT,
 
 	.probe		= smsc_phy_probe,
 
@@ -239,6 +285,11 @@ static struct phy_driver smsc_phy_driver[] = {
 	.ack_interrupt	= smsc_phy_ack_interrupt,
 	.config_intr	= smsc_phy_config_intr,
 
+	/* Statistics */
+	.get_sset_count = smsc_get_sset_count,
+	.get_strings	= smsc_get_strings,
+	.get_stats	= smsc_get_stats,
+
 	.suspend	= genphy_suspend,
 	.resume		= genphy_resume,
 }, {
@@ -246,9 +297,8 @@ static struct phy_driver smsc_phy_driver[] = {
 	.phy_id_mask	= 0xfffffff0,
 	.name		= "SMSC LAN911x Internal PHY",
 
-	.features	= (PHY_BASIC_FEATURES | SUPPORTED_Pause
-				| SUPPORTED_Asym_Pause),
-	.flags		= PHY_HAS_INTERRUPT | PHY_HAS_MAGICANEG,
+	.features	= PHY_BASIC_FEATURES,
+	.flags		= PHY_HAS_INTERRUPT,
 
 	.probe		= smsc_phy_probe,
 
@@ -268,9 +318,8 @@ static struct phy_driver smsc_phy_driver[] = {
 	.phy_id_mask	= 0xfffffff0,
 	.name		= "SMSC LAN8710/LAN8720",
 
-	.features	= (PHY_BASIC_FEATURES | SUPPORTED_Pause
-				| SUPPORTED_Asym_Pause),
-	.flags		= PHY_HAS_INTERRUPT | PHY_HAS_MAGICANEG,
+	.features	= PHY_BASIC_FEATURES,
+	.flags		= PHY_HAS_INTERRUPT,
 
 	.probe		= smsc_phy_probe,
 
@@ -283,6 +332,11 @@ static struct phy_driver smsc_phy_driver[] = {
 	/* IRQ related */
 	.ack_interrupt	= smsc_phy_ack_interrupt,
 	.config_intr	= smsc_phy_config_intr,
+
+	/* Statistics */
+	.get_sset_count = smsc_get_sset_count,
+	.get_strings	= smsc_get_strings,
+	.get_stats	= smsc_get_stats,
 
 	.suspend	= genphy_suspend,
 	.resume		= genphy_resume,
@@ -291,9 +345,8 @@ static struct phy_driver smsc_phy_driver[] = {
 	.phy_id_mask	= 0xfffffff0,
 	.name		= "SMSC LAN8740",
 
-	.features	= (PHY_BASIC_FEATURES | SUPPORTED_Pause
-				| SUPPORTED_Asym_Pause),
-	.flags		= PHY_HAS_INTERRUPT | PHY_HAS_MAGICANEG,
+	.features	= PHY_BASIC_FEATURES,
+	.flags		= PHY_HAS_INTERRUPT,
 
 	.probe		= smsc_phy_probe,
 
@@ -306,6 +359,11 @@ static struct phy_driver smsc_phy_driver[] = {
 	/* IRQ related */
 	.ack_interrupt	= smsc_phy_ack_interrupt,
 	.config_intr	= smsc_phy_config_intr,
+
+	/* Statistics */
+	.get_sset_count = smsc_get_sset_count,
+	.get_strings	= smsc_get_strings,
+	.get_stats	= smsc_get_stats,
 
 	.suspend	= genphy_suspend,
 	.resume		= genphy_resume,

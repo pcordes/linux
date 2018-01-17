@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0
 /*
  *  linux/fs/hpfs/namei.c
  *
@@ -376,12 +377,11 @@ static int hpfs_unlink(struct inode *dir, struct dentry *dentry)
 	struct inode *inode = d_inode(dentry);
 	dnode_secno dno;
 	int r;
-	int rep = 0;
 	int err;
 
 	hpfs_lock(dir->i_sb);
 	hpfs_adjust_length(name, &len);
-again:
+
 	err = -ENOENT;
 	de = map_dirent(dir, hpfs_i(dir)->i_dno, name, len, &dno, &qbh);
 	if (!de)
@@ -401,33 +401,9 @@ again:
 		hpfs_error(dir->i_sb, "there was error when removing dirent");
 		err = -EFSERROR;
 		break;
-	case 2:		/* no space for deleting, try to truncate file */
-
+	case 2:		/* no space for deleting */
 		err = -ENOSPC;
-		if (rep++)
-			break;
-
-		dentry_unhash(dentry);
-		if (!d_unhashed(dentry)) {
-			hpfs_unlock(dir->i_sb);
-			return -ENOSPC;
-		}
-		if (generic_permission(inode, MAY_WRITE) ||
-		    !S_ISREG(inode->i_mode) ||
-		    get_write_access(inode)) {
-			d_rehash(dentry);
-		} else {
-			struct iattr newattrs;
-			/*pr_info("truncating file before delete.\n");*/
-			newattrs.ia_size = 0;
-			newattrs.ia_valid = ATTR_SIZE | ATTR_CTIME;
-			err = notify_change(dentry, &newattrs, NULL);
-			put_write_access(inode);
-			if (!err)
-				goto again;
-		}
-		hpfs_unlock(dir->i_sb);
-		return -ENOSPC;
+		break;
 	default:
 		drop_nlink(inode);
 		err = 0;
@@ -532,7 +508,8 @@ const struct address_space_operations hpfs_symlink_aops = {
 };
 	
 static int hpfs_rename(struct inode *old_dir, struct dentry *old_dentry,
-		struct inode *new_dir, struct dentry *new_dentry)
+		       struct inode *new_dir, struct dentry *new_dentry,
+		       unsigned int flags)
 {
 	const unsigned char *old_name = old_dentry->d_name.name;
 	unsigned old_len = old_dentry->d_name.len;
@@ -548,6 +525,9 @@ static int hpfs_rename(struct inode *old_dir, struct dentry *old_dentry,
 	struct buffer_head *bh;
 	struct fnode *fnode;
 	int err;
+
+	if (flags & ~RENAME_NOREPLACE)
+		return -EINVAL;
 
 	if ((err = hpfs_chk_name(new_name, &new_len))) return err;
 	err = 0;

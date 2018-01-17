@@ -5,7 +5,7 @@
  ******************************************************************************/
 
 /*
- * Copyright (C) 2000 - 2016, Intel Corp.
+ * Copyright (C) 2000 - 2017, Intel Corp.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -87,7 +87,7 @@ acpi_rs_convert_aml_to_resource(struct acpi_resource *resource,
 		return_ACPI_STATUS(AE_BAD_PARAMETER);
 	}
 
-	if (((acpi_size) resource) & 0x3) {
+	if (((acpi_size)resource) & 0x3) {
 
 		/* Each internal resource struct is expected to be 32-bit aligned */
 
@@ -596,9 +596,7 @@ acpi_rs_convert_resource_to_aml(struct acpi_resource *resource,
 
 			/* Set vendor offset only if there is vendor data */
 
-			if (resource->data.gpio.vendor_length) {
-				ACPI_SET16(target, aml_length);
-			}
+			ACPI_SET16(target, aml_length);
 
 			acpi_rs_set_resource_length(aml_length, aml);
 			break;

@@ -238,11 +238,9 @@ struct s3c_adc_client *s3c_adc_register(struct platform_device *pdev,
 	if (!pdev)
 		return ERR_PTR(-EINVAL);
 
-	client = kzalloc(sizeof(struct s3c_adc_client), GFP_KERNEL);
-	if (!client) {
-		dev_err(&pdev->dev, "no memory for adc client\n");
+	client = kzalloc(sizeof(*client), GFP_KERNEL);
+	if (!client)
 		return ERR_PTR(-ENOMEM);
-	}
 
 	client->pdev = pdev;
 	client->is_ts = is_ts;
@@ -344,11 +342,9 @@ static int s3c_adc_probe(struct platform_device *pdev)
 	int ret;
 	unsigned tmp;
 
-	adc = devm_kzalloc(dev, sizeof(struct adc_device), GFP_KERNEL);
-	if (adc == NULL) {
-		dev_err(dev, "failed to allocate adc_device\n");
+	adc = devm_kzalloc(dev, sizeof(*adc), GFP_KERNEL);
+	if (!adc)
 		return -ENOMEM;
-	}
 
 	spin_lock_init(&adc->lock);
 
@@ -422,8 +418,7 @@ static int s3c_adc_remove(struct platform_device *pdev)
 #ifdef CONFIG_PM
 static int s3c_adc_suspend(struct device *dev)
 {
-	struct platform_device *pdev = container_of(dev,
-			struct platform_device, dev);
+	struct platform_device *pdev = to_platform_device(dev);
 	struct adc_device *adc = platform_get_drvdata(pdev);
 	unsigned long flags;
 	u32 con;
@@ -444,8 +439,7 @@ static int s3c_adc_suspend(struct device *dev)
 
 static int s3c_adc_resume(struct device *dev)
 {
-	struct platform_device *pdev = container_of(dev,
-			struct platform_device, dev);
+	struct platform_device *pdev = to_platform_device(dev);
 	struct adc_device *adc = platform_get_drvdata(pdev);
 	enum s3c_cpu_type cpu = platform_get_device_id(pdev)->driver_data;
 	int ret;

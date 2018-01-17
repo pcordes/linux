@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0
 /*
  *  linux/arch/h8300/kernel/setup.c
  *
@@ -20,8 +21,6 @@
 #include <linux/bootmem.h>
 #include <linux/seq_file.h>
 #include <linux/init.h>
-#include <linux/platform_device.h>
-#include <linux/module.h>
 #include <linux/of.h>
 #include <linux/of_fdt.h>
 #include <linux/of_platform.h>
@@ -137,11 +136,6 @@ void __init setup_arch(char **cmdline_p)
 	parse_early_param();
 
 	bootmem_init();
-#if defined(CONFIG_H8300H_SIM) || defined(CONFIG_H8S_SIM)
-	sim_console_register();
-#endif
-
-	early_platform_driver_probe("earlyprintk", 1, 0);
 	/*
 	 * get kmalloc into gear
 	 */
@@ -253,5 +247,5 @@ void __init calibrate_delay(void)
 void __init time_init(void)
 {
 	of_clk_init(NULL);
-	clocksource_probe();
+	timer_probe();
 }

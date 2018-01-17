@@ -144,7 +144,8 @@ static int btsdio_rx_packet(struct btsdio_data *data)
 	if (!skb) {
 		/* Out of memory. Prepare a read retry and just
 		 * return with the expectation that the next time
-		 * we're called we'll have more memory. */
+		 * we're called we'll have more memory.
+		 */
 		return -ENOMEM;
 	}
 
@@ -311,7 +312,7 @@ static int btsdio_probe(struct sdio_func *func,
 	if (id->class == SDIO_CLASS_BT_AMP)
 		hdev->dev_type = HCI_AMP;
 	else
-		hdev->dev_type = HCI_BREDR;
+		hdev->dev_type = HCI_PRIMARY;
 
 	data->hdev = hdev;
 
